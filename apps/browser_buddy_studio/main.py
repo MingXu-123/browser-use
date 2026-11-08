@@ -39,7 +39,15 @@ class ClipboardApi:
 
 	def quit(self) -> bool:
 		"""Quit the app after in-app data cleanup, without leaving helpers behind."""
-		threading.Thread(target=webview.destroy_window, daemon=True).start()
+
+		def _destroy_windows() -> None:
+			# pywebview 4+ dropped the module-level destroy_window(); windows are
+			# closed through Window.destroy(). Tearing them down from inside the
+			# JS bridge callback deadlocks the Cocoa main thread, so use a thread.
+			for window in list(webview.windows):
+				window.destroy()
+
+		threading.Thread(target=_destroy_windows, daemon=True).start()
 		return True
 
 

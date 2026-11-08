@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -1169,6 +1171,25 @@ async def open_data() -> dict:
 	return {'ok': True, 'path': str(APP_SUPPORT_DIR)}
 
 
+def _schedule_hard_exit(delay: float = 2.5) -> None:
+	"""Guarantee the process exits after a data wipe.
+
+	Delete-data removes every file this process owns, including the WebView
+	store, so the JS promise that calls the quit bridge can occasionally never
+	settle and the window stays on screen spinning forever. Give the HTTP
+	response a moment to flush, then leave the same way a clean quit would.
+	"""
+
+	def _run() -> None:
+		time.sleep(delay)
+		try:
+			shutdown_runtime()
+		finally:
+			os._exit(0)
+
+	threading.Thread(target=_run, daemon=True).start()
+
+
 @app.post('/api/delete-data')
 async def delete_data(request: ConfirmRequest) -> dict:
 	"""Remove every local trace of the app. The UI quits right afterwards."""
@@ -1185,6 +1206,7 @@ async def delete_data(request: ConfirmRequest) -> dict:
 			pass
 	await asyncio.to_thread(_cleanup_stale_browser_profile)
 	await asyncio.to_thread(delete_local_data)
+	_schedule_hard_exit()
 	return {'ok': True}
 
 
