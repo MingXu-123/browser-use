@@ -172,6 +172,42 @@ def remove_auth_cookies(site: str) -> bool:
 	return True
 
 
+def forget_site(site: str) -> bool:
+	"""Drop every saved cookie for one platform so another account can sign in.
+
+	Unlike remove_auth_cookies(), which only drops the identifying cookies, this
+	also removes the platform's device/anonymous cookies so the next login starts
+	from a clean session instead of reusing the previous account's state.
+	"""
+	info = PLATFORMS.get(site)
+	if not info:
+		return False
+	removed = False
+	try:
+		payload = json.loads(BROWSER_STATE_FILE.read_text(encoding='utf-8'))
+	except Exception:
+		payload = None
+	if isinstance(payload, dict) and isinstance(payload.get('cookies'), list):
+		cookies = [cookie for cookie in payload['cookies'] if isinstance(cookie, dict)]
+		kept = [
+			cookie for cookie in cookies if not _domain_matches(str(cookie.get('domain', '')), info['domains'])
+		]
+		removed = len(kept) != len(cookies)
+		payload['cookies'] = kept
+		try:
+			temp = BROWSER_STATE_FILE.with_suffix(BROWSER_STATE_FILE.suffix + '.tmp')
+			temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+			temp.replace(BROWSER_STATE_FILE)
+		except Exception:
+			pass
+
+	records = read_records()
+	if site in records:
+		records.pop(site, None)
+		_write_records(records)
+	return removed
+
+
 def invalidate_login(site: str, reason: str = '') -> None:
 	"""Mark a saved platform session as unusable and remove its stale cookies.
 
@@ -200,7 +236,14 @@ def platform_status() -> list[dict[str, Any]]:
 	result: list[dict[str, Any]] = []
 	for site, info in PLATFORMS.items():
 		entry = records.get(site) if isinstance(records.get(site), dict) else {}
-		alive = has_auth_cookie(cookies, site, now) and not entry.get('invalidated_at')
+		# A cookie alone is not proof of a login: Xiaohongshu hands web_session
+		# to anonymous visitors. Require a session that was actually recorded
+		# after a verified login.
+		alive = (
+			bool(entry.get('logged_in'))
+			and has_auth_cookie(cookies, site, now)
+			and not entry.get('invalidated_at')
+		)
 		result.append(
 			{
 				'site': site,

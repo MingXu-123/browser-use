@@ -14,6 +14,7 @@ import {
   getPreferences,
   getProviders,
   getState,
+  logoutPlatform,
   openDataFolder,
   openDownloads,
   openLogs,
@@ -882,10 +883,12 @@ function SettingsDrawer({
   onDeleteData,
   platforms,
   onLoginSite,
+  onSwitchAccount,
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  const [switchSite, setSwitchSite] = useState(null)
 
   if (!open) return null
   const providerInfo = providers.find((item) => item.name === settings.provider)
@@ -1023,6 +1026,21 @@ function SettingsDrawer({
                 <>
                   <span className="platform-note">{formatLoginDate(item.last_login_at)}</span>
                   <span className="platform-status ready">已登录</span>
+                  {switchSite === item.site ? (
+                    <button
+                      className="soft-chip danger"
+                      onClick={() => {
+                        setSwitchSite(null)
+                        onSwitchAccount(item.site)
+                      }}
+                    >
+                      确认切换
+                    </button>
+                  ) : (
+                    <button className="soft-chip" onClick={() => setSwitchSite(item.site)}>
+                      切换账号
+                    </button>
+                  )}
                 </>
               ) : (
                 <button className="soft-chip" onClick={() => onLoginSite(item.site)}>
@@ -1932,6 +1950,22 @@ export default function App() {
     }
   }
 
+  async function handleSwitchAccount(site) {
+    setLoginError('')
+    try {
+      // Forget the saved session first, otherwise the login window would open
+      // already signed in and the user could not pick another account.
+      const result = await logoutPlatform(site)
+      if (Array.isArray(result.logins)) setPlatforms(result.logins)
+      setSettingsOpen(false)
+      setLoginOpen(true)
+      await handleLoginStart(site)
+    } catch (e) {
+      setLoginError(e.message)
+      setLoginOpen(true)
+    }
+  }
+
   async function handleLoginFinish() {
     try {
       // The backend validates the cookies and publishes login_finished; the
@@ -2043,6 +2077,7 @@ export default function App() {
         onOpenData={openDataFolder}
         onDeleteData={deleteLocalData}
         platforms={platforms}
+        onSwitchAccount={handleSwitchAccount}
         onLoginSite={(site) => {
           setSettingsOpen(false)
           setLoginError('')

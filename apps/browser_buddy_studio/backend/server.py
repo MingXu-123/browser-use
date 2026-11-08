@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from typing import Any
@@ -40,7 +41,7 @@ from .artifacts import build_sources, collect_artifacts, repair_xhs_links  # noq
 from .intent import chat_reply, needs_browser  # noqa: E402
 from .platform_logins import (  # noqa: E402
 	auth_cookie_signature,
-	has_auth_cookie,
+	forget_site,
 	invalidate_login,
 	platform_status,
 	read_cookies,
@@ -103,6 +104,10 @@ CURRENT_BROWSER: Browser | None = None
 STOP_REQUESTED = False
 LOGIN_SESSION: Browser | None = None
 LOGIN_SITE: str | None = None
+# Cookies present when the login page finished loading. A platform can issue an
+# anonymous session cookie on first visit (Xiaohongshu's web_session), so only a
+# *changed* auth cookie means the user really signed in.
+LOGIN_BASELINE: set[str] | None = None
 LOGIN_PREPARE_TASK: asyncio.Task | None = None
 LOGIN_WATCH_TASK: asyncio.Task | None = None
 LOGIN_LOCK = asyncio.Lock()
@@ -164,6 +169,10 @@ class LoginRequest(BaseModel):
 	site: str
 
 
+class LogoutRequest(BaseModel):
+	site: str
+
+
 class OpenUrlRequest(BaseModel):
 	url: str
 
@@ -205,6 +214,18 @@ def _cleanup_stale_browser_profile() -> None:
 			(PROFILE_DIR / lock_name).unlink(missing_ok=True)
 		except Exception:
 			pass
+
+
+def _forget_platform(site: str) -> None:
+	"""Clear one platform's saved session so another account can sign in.
+
+	The saved cookie jar is not enough: the login browser also keeps cookies in
+	its persistent profile, so the previous account would come straight back.
+	Other platforms stay signed in because their cookies live in storage_state.
+	"""
+	forget_site(site)
+	shutil.rmtree(PROFILE_DIR, ignore_errors=True)
+	_cleanup_stale_browser_profile()
 
 
 def _allow_manual_close(browser: Browser) -> None:
@@ -320,18 +341,28 @@ async def _detect_login_wall(browser: Browser | None) -> tuple[bool, str | None,
 
 async def _watch_login_until_ready(browser: Browser, site: str, event: asyncio.Event, baseline: set[str]) -> None:
 	"""Auto-resume a paused task as soon as the platform login becomes valid."""
+	# A navigate can briefly detach the focused target while the session manager
+	# recovers a new tab. Treating that one moment as "the user closed the
+	# browser" aborts the login prompt before they can even scan the QR code, so
+	# only give up after the session stays empty for three minutes.
+	missing_pages = 0
 	while not event.is_set():
 		if STOP_REQUESTED:
 			return
 		try:
-			if not _browser_has_pages(browser):
+			has_pages = _browser_has_pages(browser)
+		except Exception:
+			has_pages = False
+		if not has_pages:
+			missing_pages += 1
+			# 120 * 1.5s = 3 minutes without any tab before giving up.
+			if missing_pages >= 120:
 				HUMAN_STATE['cancelled'] = True
 				event.set()
 				return
-		except Exception:
-			HUMAN_STATE['cancelled'] = True
-			event.set()
-			return
+			await asyncio.sleep(1.5)
+			continue
+		missing_pages = 0
 
 		try:
 			cookies = await browser.cookies()
@@ -502,18 +533,30 @@ async def _save_storage_state(browser: Browser) -> None:
 		temp.unlink(missing_ok=True)
 
 
+async def _login_signature(browser: Browser, site: str | None) -> set[str] | None:
+	"""Live auth-cookie fingerprint for a platform, or None when unavailable."""
+	if not site:
+		return None
+	try:
+		return auth_cookie_signature(await browser.cookies(), site)
+	except Exception:
+		return None
+
+
 async def _login_succeeded(browser: Browser, site: str | None) -> bool:
+	"""True only when the auth cookie differs from the pre-login snapshot."""
 	if not site:
 		return False
-	try:
-		cookies = await browser.cookies()
-	except Exception:
+	signature = await _login_signature(browser, site)
+	if signature is None:
 		return False
-	return has_auth_cookie(cookies, site)
+	if LOGIN_BASELINE is None:
+		return bool(signature)
+	return bool(signature - LOGIN_BASELINE)
 
 
 async def _close_login_browser(cancelled: bool = False, reason: str = 'manual') -> None:
-	global LOGIN_SESSION, LOGIN_SITE, LOGIN_PREPARE_TASK, LOGIN_WATCH_TASK
+	global LOGIN_SESSION, LOGIN_SITE, LOGIN_PREPARE_TASK, LOGIN_WATCH_TASK, LOGIN_BASELINE
 
 	if LOGIN_PREPARE_TASK is not None and not LOGIN_PREPARE_TASK.done():
 		LOGIN_PREPARE_TASK.cancel()
@@ -544,10 +587,14 @@ async def _close_login_browser(cancelled: bool = False, reason: str = 'manual') 
 
 	# The browser may already be gone when the user clicks "已完成登录"; fall
 	# back to the last exported cookie jar so a successful scan is not lost.
+	# Still compare against the pre-login snapshot, otherwise the anonymous
+	# session cookie every visitor gets would look like a successful login.
 	if not success and site is not None and not cancelled:
-		success = has_auth_cookie(read_cookies(), site)
+		signature = auth_cookie_signature(read_cookies(), site)
+		success = bool(signature - LOGIN_BASELINE) if LOGIN_BASELINE is not None else False
 	if success and site is not None:
 		record_login(site, True)
+	LOGIN_BASELINE = None
 
 	logins = platform_status()
 	if success:
@@ -566,9 +613,14 @@ async def _close_login_browser(cancelled: bool = False, reason: str = 'manual') 
 
 
 async def _watch_login_browser(browser: Browser, site: str) -> None:
-	"""Auto-close the login window after a successful scan, or when closed."""
+	"""Auto-close the login window after a real scan, or when the user closes it."""
+	global LOGIN_BASELINE
 	try:
 		await asyncio.sleep(0.8)
+		# Platforms hand out anonymous session cookies on first load, so snapshot
+		# the jar once the page settles and only treat a later change as a login.
+		settle_until = time.time() + 4.0
+		LOGIN_BASELINE = None
 		while LOGIN_SESSION is browser:
 			if not _browser_has_pages(browser):
 				await asyncio.sleep(0.5)
@@ -576,14 +628,20 @@ async def _watch_login_browser(browser: Browser, site: str) -> None:
 					logger.info('Login browser was closed by the user')
 					await _close_login_browser(cancelled=True, reason='closed')
 					return
-			if await _login_succeeded(browser, site):
-				# Confirm on the next poll: some flows set a cookie before a
-				# second factor (SMS/slider) is finished.
-				await asyncio.sleep(1.0)
-				if LOGIN_SESSION is browser and await _login_succeeded(browser, site):
-					logger.info(f'Detected successful login for {site}')
-					await _close_login_browser(cancelled=False, reason='detected')
-					return
+			signature = await _login_signature(browser, site)
+			if signature is not None:
+				if LOGIN_BASELINE is None:
+					if time.time() >= settle_until:
+						LOGIN_BASELINE = signature
+				elif signature - LOGIN_BASELINE:
+					# Confirm on the next poll: some flows set a cookie before a
+					# second factor (SMS/slider) is finished.
+					await asyncio.sleep(1.0)
+					again = await _login_signature(browser, site)
+					if LOGIN_SESSION is browser and again is not None and again - LOGIN_BASELINE:
+						logger.info(f'Detected successful login for {site}')
+						await _close_login_browser(cancelled=False, reason='detected')
+						return
 			await asyncio.sleep(1.0)
 	except asyncio.CancelledError:
 		raise
@@ -929,6 +987,24 @@ async def login_finish() -> dict:
 async def login_cancel() -> dict:
 	await _close_login_browser(cancelled=True, reason='cancel')
 	return {'ok': True, 'logins': platform_status()}
+
+
+@app.post('/api/logout')
+async def logout(request: LogoutRequest) -> dict:
+	"""Forget one platform's session so the user can switch accounts."""
+	if request.site not in LOGIN_URLS:
+		raise HTTPException(status_code=400, detail='不支持的登录站点')
+	if CURRENT_TASK is not None and not CURRENT_TASK.done():
+		raise HTTPException(status_code=409, detail='请先等待当前任务结束')
+	if HUMAN_STATE.get('active'):
+		raise HTTPException(status_code=409, detail='请先完成当前的人工验证')
+
+	async with LOGIN_LOCK:
+		if LOGIN_SESSION is not None:
+			await _close_login_browser(cancelled=True, reason='switch account')
+		await asyncio.to_thread(_forget_platform, request.site)
+	HUB.publish({'type': 'logins_updated', 'logins': platform_status()})
+	return {'ok': True, 'site': request.site, 'logins': platform_status()}
 
 
 async def _navigate_view_browser(browser: Browser, url: str) -> None:

@@ -85,6 +85,13 @@ export function deleteLocalData() {
   })
 }
 
+export function logoutPlatform(site) {
+  return jsonFetch('/api/logout', {
+    method: 'POST',
+    body: JSON.stringify({ site }),
+  })
+}
+
 export function openUrl(url) {
   return jsonFetch('/api/open-url', {
     method: 'POST',
