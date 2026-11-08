@@ -452,13 +452,18 @@ function isLoggedInSource(url) {
   }
 }
 
+// 只有笔记详情页 /explore/<id>、/search_result/<id>、/discovery/item/<id> 才需要 xsec_token。
+// 搜索页 /search_result/?keyword=... 和个人主页 /user/profile/<id> 同样匹配这些前缀，但不需要令牌，
+// 所以这里必须要求路径里带 24 位十六进制的笔记 id，否则会把搜索页误判成缺令牌的笔记。
+const XHS_NOTE_PATH_RE = /\/(?:explore|search_result|discovery\/item)\/([0-9a-f]{24})(?:[/?#]|$)/i
+
 function lacksXiaohongshuToken(url) {
   try {
     const parsed = new URL(url)
     const host = parsed.hostname.toLowerCase()
     const isXiaohongshu = host === 'xiaohongshu.com' || host.endsWith('.xiaohongshu.com')
-    const isNote = parsed.pathname.startsWith('/explore/') || parsed.pathname.startsWith('/search_result/')
-    return isXiaohongshu && isNote && !parsed.searchParams.get('xsec_token')
+    if (!isXiaohongshu || !XHS_NOTE_PATH_RE.test(parsed.pathname)) return false
+    return !parsed.searchParams.get('xsec_token')
   } catch {
     return false
   }
