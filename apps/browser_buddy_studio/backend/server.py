@@ -772,6 +772,11 @@ async def _run_agent(request: RunRequest) -> None:
 			headless=request.headless,
 			executable_path=BROWSER_EXECUTABLE,
 			args=BROWSER_ARGS,
+			# browser-use downloads ad-block/cookie extensions from
+			# clients2.google.com synchronously on the event loop. That host
+			# is unreachable in mainland China and can hang every request, so
+			# the app intentionally skips these extensions.
+			enable_default_extensions=False,
 			user_data_dir=str(PROFILE_DIR),
 			storage_state=str(BROWSER_STATE_FILE),
 			downloads_path=str(DOWNLOADS_DIR),
@@ -961,6 +966,11 @@ async def login_start(request: LoginRequest) -> dict:
 			headless=False,
 			executable_path=BROWSER_EXECUTABLE,
 			args=BROWSER_ARGS,
+			# browser-use downloads ad-block/cookie extensions from
+			# clients2.google.com synchronously on the event loop. That host
+			# is unreachable in mainland China and can hang every request, so
+			# the app intentionally skips these extensions.
+			enable_default_extensions=False,
 			user_data_dir=str(PROFILE_DIR),
 			storage_state=str(BROWSER_STATE_FILE),
 			downloads_path=str(DOWNLOADS_DIR),
@@ -1093,6 +1103,11 @@ async def open_url(request: OpenUrlRequest) -> dict:
 			headless=False,
 			executable_path=BROWSER_EXECUTABLE,
 			args=BROWSER_ARGS,
+			# browser-use downloads ad-block/cookie extensions from
+			# clients2.google.com synchronously on the event loop. That host
+			# is unreachable in mainland China and can hang every request, so
+			# the app intentionally skips these extensions.
+			enable_default_extensions=False,
 			user_data_dir=str(PROFILE_DIR),
 			storage_state=str(BROWSER_STATE_FILE),
 			downloads_path=str(DOWNLOADS_DIR),
