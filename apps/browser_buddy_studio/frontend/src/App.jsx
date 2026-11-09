@@ -1535,6 +1535,33 @@ export default function App() {
     }
   }, [])
 
+  // Never let the WKWebView replace the app UI with a remote page. Every
+  // http(s) link is handed to the backend, which opens it in the app's
+  // dedicated Chrome window (with normal back/forward controls).
+  useEffect(() => {
+    function handleDocumentClick(event) {
+      if (event.defaultPrevented) return
+      const target = event.target
+      const anchor = target instanceof Element ? target.closest('a[href]') : null
+      if (!anchor) return
+      const raw = anchor.getAttribute('href') || ''
+      if (!raw || raw.startsWith('#') || raw.startsWith('javascript:')) return
+      let url
+      try {
+        url = new URL(raw, window.location.href)
+      } catch {
+        return
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+      event.preventDefault()
+      event.stopPropagation()
+      openUrl(url.href).catch((error) => showToast(error.message || '打开链接失败'))
+    }
+
+    document.addEventListener('click', handleDocumentClick)
+    return () => document.removeEventListener('click', handleDocumentClick)
+  }, [showToast])
+
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === activeThreadId) || null,
     [threads, activeThreadId],
