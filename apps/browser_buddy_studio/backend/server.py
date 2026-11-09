@@ -191,15 +191,27 @@ def _cleanup_stale_browser_profile() -> None:
 	older builds.
 	"""
 	profile_markers = (str(PROFILE_DIR), str(LEGACY_PROFILE_DIR))
+	executable_markers = (
+		'Google Chrome for Testing.app/',
+		'Chromium.app/',
+		'Google Chrome.app/',
+		'Microsoft Edge.app/',
+		'Brave Browser.app/',
+	)
 	victims: list[psutil.Process] = []
 	for proc in psutil.process_iter(['pid', 'cmdline']):
 		try:
-			cmdline = ' '.join(proc.info.get('cmdline') or [])
+			argv = proc.info.get('cmdline') or []
+			executable = argv[0] if argv else ''
+			# Only inspect real browser executables; never match a shell or
+			# script whose command line merely contains the marker text.
+			if not any(marker in executable for marker in executable_markers):
+				continue
+			cmdline = ' '.join(argv)
 			if not any(marker in cmdline for marker in profile_markers) and BROWSER_SESSION_MARKER not in cmdline:
 				continue
-			if any(name in cmdline for name in ('Google Chrome', 'Chromium', 'chrome')):
-				proc.terminate()
-				victims.append(proc)
+			proc.terminate()
+			victims.append(proc)
 		except Exception:
 			continue
 
