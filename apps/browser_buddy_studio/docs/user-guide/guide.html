@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>BrowserBuddy 2.0 安装与使用说明</title>
+<style>
+  @page {
+    size: A4;
+    margin: 15mm 15mm 17mm 15mm;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #0d0d0d;
+    font-size: 9.7pt;
+    line-height: 1.62;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  h1, h2, h3 { margin: 0; line-height: 1.25; letter-spacing: -0.02em; }
+  h2 { font-size: 19.5pt; margin-bottom: 2.8mm; }
+  h3 { font-size: 12pt; margin: 5mm 0 1.5mm; }
+  p { margin: 0 0 2.4mm; color: #303030; }
+  ul, ol { margin: 0 0 3mm; padding-left: 6mm; }
+  li { margin-bottom: 1.6mm; }
+  a { color: #0d8a6b; text-decoration: none; }
+  .page { page-break-after: always; min-height: 255mm; position: relative; }
+  .page:last-child { page-break-after: auto; }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 2mm;
+    font-size: 8.5pt; font-weight: 700; letter-spacing: .14em;
+    color: #0d8a6b; text-transform: uppercase; margin-bottom: 3mm;
+  }
+  .kicker::before { content: ''; width: 14mm; height: 2px; background: #10a37f; display: inline-block; }
+  .lead { font-size: 11.5pt; color: #4b5563; margin-bottom: 5mm; }
+  .muted { color: #6b7280; }
+  .small { font-size: 9pt; }
+  .pill {
+    display: inline-block; padding: 1mm 3mm; border-radius: 999px;
+    background: #ecfdf5; color: #0d8a6b; font-size: 8.5pt; font-weight: 700;
+    border: 1px solid #d1fae5; margin-right: 2mm;
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+  .card {
+    border: 1px solid #e5e5e5; border-radius: 4mm; padding: 5mm;
+    background: #ffffff; break-inside: avoid;
+  }
+  .card.soft { background: #f9f9f9; }
+  .note, .warn, .tip {
+    border-radius: 3.2mm; padding: 3mm 4mm; margin: 3mm 0;
+    font-size: 9pt; line-height: 1.55; break-inside: avoid;
+  }
+  .note { background: #f5f7f6; border: 1px solid #e5e5e5; }
+  .tip { background: #ecfdf5; border: 1px solid #d1fae5; color: #065f46; }
+  .warn { background: #fff7ed; border: 1px solid #fed7aa; color: #7c2d12; }
+  .note strong, .tip strong, .warn strong { color: inherit; }
+  .num {
+    display: inline-flex; width: 7mm; height: 7mm; border-radius: 50%;
+    background: #10a37f; color: #fff; font-size: 9pt; font-weight: 700;
+    align-items: center; justify-content: center; margin-right: 2.5mm;
+    flex: 0 0 7mm;
+  }
+  .step { display: flex; gap: 2.6mm; align-items: flex-start; margin-bottom: 2.4mm; }
+  .step > div { flex: 1; }
+  .step b { display: block; }
+  .shot {
+    width: 100%; border: 1px solid #e5e5e5; border-radius: 3.5mm;
+    display: block; margin: 2mm 0 1.5mm;
+    box-shadow: 0 3mm 8mm rgba(0,0,0,.06);
+  }
+  .shot.s70 { width: 70%; margin-left: auto; margin-right: auto; }
+  .shot.s75 { width: 75%; margin-left: auto; margin-right: auto; }
+  .shot.s85 { width: 85%; margin-left: auto; margin-right: auto; }
+  .shot.s92 { width: 92%; margin-left: auto; margin-right: auto; }
+  .caption { font-size: 8.5pt; color: #6b7280; margin: 0 0 3mm; }
+  .shot-block { break-inside: avoid; }
+  .cover {
+    min-height: 255mm; display: flex; flex-direction: column; justify-content: center;
+    background: linear-gradient(145deg, #f7fbf9 0%, #eef7f3 45%, #ffffff 100%);
+    border: 1px solid #e5e5e5; border-radius: 6mm; padding: 18mm 18mm 14mm;
+    position: relative; overflow: hidden;
+  }
+  .cover::after {
+    content: ''; position: absolute; right: -35mm; top: -35mm;
+    width: 120mm; height: 120mm; border-radius: 50%;
+    background: radial-gradient(circle, rgba(16,163,127,.14), rgba(16,163,127,0) 68%);
+  }
+  .cover-icon { width: 30mm; height: 30mm; border-radius: 7mm; margin-bottom: 10mm; }
+  .cover h1 { font-size: 36pt; letter-spacing: -0.04em; margin-bottom: 3mm; }
+  .cover .sub { font-size: 17pt; color: #374151; margin-bottom: 2mm; }
+  .cover .desc { font-size: 11pt; color: #6b7280; margin-top: 7mm; max-width: 120mm; }
+  .cover .meta { margin-top: 16mm; font-size: 9.5pt; color: #6b7280; }
+  .cover .features { display: flex; gap: 4mm; margin-top: 12mm; flex-wrap: wrap; }
+  .cover .feature {
+    background: rgba(255,255,255,.82); border: 1px solid #d1fae5;
+    border-radius: 3mm; padding: 3mm 4mm; font-size: 9pt; color: #065f46;
+  }
+  .toc { margin-top: 5mm; }
+  .toc-item { display: flex; justify-content: space-between; padding: 2.6mm 0; border-bottom: 1px dashed #e5e5e5; font-size: 10pt; }
+  .toc-item span:first-child { color: #303030; }
+  .toc-item span:last-child { color: #9ca3af; }
+  .kv { width: 100%; border-collapse: collapse; margin: 3mm 0; font-size: 9.5pt; }
+  .kv td { padding: 2.4mm 2mm; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  .kv td:first-child { width: 30%; color: #6b7280; }
+  .faq { margin-bottom: 3.5mm; break-inside: avoid; }
+  .faq b { display: block; margin-bottom: 1mm; }
+  .footer {
+    position: absolute; left: 0; right: 0; bottom: -6mm;
+    display: flex; justify-content: space-between; font-size: 8pt; color: #9ca3af;
+  }
+  .divider { height: 1px; background: #e5e5e5; margin: 5mm 0; }
+  .inline-code { font-family: 'SF Mono', Menlo, monospace; font-size: 8.8pt; background: #f5f5f5; border: 1px solid #e5e5e5; padding: .3mm 1.4mm; border-radius: 1.2mm; }
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding-left: 6mm; position: relative; }
+  .checklist li::before { content: '✓'; position: absolute; left: 0; color: #10a37f; font-weight: 700; }
+  .checklist.dont li::before { content: '✕'; color: #e02e2a; }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<section class="page cover">
+  <img class="cover-icon" src="final/icon.png" alt="BrowserBuddy">
+  <h1>BrowserBuddy 2.0</h1>
+  <div class="sub">macOS 安装与使用说明</div>
+  <div class="desc">
+    写给第一次使用 AI 浏览器的你。<br>
+    不需要安装 Python、Node.js 或 Chrome，拖进 Applications 就能开始。
+  </div>
+  <div class="features">
+    <span class="feature">内置浏览器</span>
+    <span class="feature">无需终端命令</span>
+    <span class="feature">API Key 保存在本机</span>
+    <span class="feature">支持平台扫码登录</span>
+  </div>
+  <div class="meta">版本 2.0.0 · 2026 年 11 月 · 适用于 Apple Silicon Mac</div>
+</section>
+
+<!-- START -->
+<section class="page">
+  <div class="kicker">开始之前</div>
+  <h2>先花 1 分钟，了解你会用到什么</h2>
+  <p class="lead">BrowserBuddy 是一个“会自己开浏览器”的 AI 助手：你描述目标，它打开一个真实的 Chrome 窗口，点击、输入、翻页，最后把结果和来源整理给你。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3 style="margin-top:0">你需要准备</h3>
+      <ul class="checklist">
+        <li>Apple Silicon Mac（M1 / M2 / M3 / M4）</li>
+        <li>macOS 12 或更新版本</li>
+        <li>能正常上网</li>
+        <li>一个模型 API Key（推荐 DeepSeek）</li>
+      </ul>
+    </div>
+    <div class="card soft">
+      <h3 style="margin-top:0">你不需要准备</h3>
+      <ul class="checklist">
+        <li>不需要安装 Python</li>
+        <li>不需要安装 Node.js</li>
+        <li>不需要单独安装 Chrome</li>
+        <li>不需要使用终端或命令</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>5 分钟快速开始</h3>
+  <div class="step"><span class="num">1</span><div><b>安装 App</b><span class="muted">双击 DMG，把 BrowserBuddy 拖进 Applications。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>第一次打开</b><span class="muted">右键 BrowserBuddy → 打开 → 再点“打开”。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>填写 API Key</b><span class="muted">打开设置 → 选择 DeepSeek → 粘贴 Key → 发送第一个任务，Key 会自动保存。</span></div></div>
+  <div class="step"><span class="num">4</span><div><b>说出你的任务</b><span class="muted">例如：“搜索 browser automation，总结前 3 个结果并附上链接。”</span></div></div>
+  <div class="step"><span class="num">5</span><div><b>查看结果</b><span class="muted">结果、步骤和来源会整理在对话里；点来源会在 Chrome 中打开。</span></div></div>
+
+  <div class="note">
+    <strong>本说明的截图</strong>来自 BrowserBuddy 2.0 的浅色主题。实际界面会因系统版本、模型和网站略有不同，但按钮位置和操作流程是一致的。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>02</span></div>
+</section>
+
+<!-- INSTALL -->
+<section class="page">
+  <div class="kicker">第 1 步</div>
+  <h2>安装到 Applications</h2>
+  <img class="shot s92" src="final/07-install.jpg" alt="把 BrowserBuddy 拖到 Applications">
+  <p class="caption">安装只有一个动作：把左边的 BrowserBuddy 拖到右边的 Applications 文件夹。</p>
+
+  <div class="step"><span class="num">1</span><div><b>打开 DMG</b><span class="muted">双击下载好的 <span class="inline-code">BrowserBuddy-2.0.dmg</span>，会弹出一个 Finder 窗口。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>拖进 Applications</b><span class="muted">按住 BrowserBuddy 图标，拖到 Applications 文件夹，松手。看到进度条结束即可。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>第一次打开</b><span class="muted">打开 Applications，<strong>右键点击 BrowserBuddy → 打开</strong>，在弹窗里再点一次“打开”。</span></div></div>
+
+  <div class="warn">
+    <strong>为什么第一次要右键打开？</strong><br>
+    当前版本使用 ad-hoc 签名，还没有做 Apple 开发者公证，所以 macOS 会提示“无法验证开发者”。这不是病毒，也不是安装失败。右键 → 打开一次即可；之后可以直接双击。
+  </div>
+
+  <div class="note">
+    <strong>如果右键打开后仍然被拦截：</strong><br>
+    打开“系统设置 → 隐私与安全性”，在页面底部找到 BrowserBuddy，点击“仍要打开”，然后再次打开 App。
+  </div>
+
+  <div class="tip">
+    <strong>不要直接从 DMG 里运行。</strong>请先把 App 拖进 Applications 再打开，这样数据、登录状态和更新都会保存在固定位置。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>03</span></div>
+</section>
+
+<!-- API KEY -->
+<section class="page">
+  <div class="kicker">第 2 步</div>
+  <h2>填写模型 API Key</h2>
+  <img class="shot s80" src="final/04-settings-key.jpg" alt="设置里的 API Key 输入框">
+  <p class="caption">点击左下角齿轮打开设置。第一次使用时，API Key 输入框是空的。</p>
+
+  <div class="step"><span class="num">1</span><div><b>选择模型提供商</b><span class="muted">推荐 <strong>DeepSeek</strong>：国内访问稳定，价格低。也可以选 Browser Use、OpenAI、Anthropic 或 Google Gemini。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>获取 API Key</b><span class="muted">打开 <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>，注册/登录后创建一个 Key，复制以 <span class="inline-code">sk-</span> 开头的字符串。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>粘贴并发送第一个任务</b><span class="muted">把 Key 粘贴到“API Key”输入框，然后直接发送一个任务。Key 会在任务启动时自动保存。</span></div></div>
+  <div class="step"><span class="num">4</span><div><b>确认已连接</b><span class="muted">保存成功后，左下角会从“需要 API Key”变成“API 已连接”；设置里会显示“Key 已保存在本机”。</span></div></div>
+
+  <div class="note">
+    <strong>API Key 存在哪里？</strong><br>
+    保存在本机的 <span class="inline-code">~/Library/Application Support/BrowserBuddy/secrets.json</span>，文件权限为 0600（只有你自己的账户能读）。Key 不会写进前端页面、日志或代码仓库，只会用于调用你选择的模型服务。
+  </div>
+
+  <div class="tip">
+    <strong>不要把 API Key 发给别人。</strong>它相当于你的模型账户密码。如果怀疑泄露，去模型平台删除旧 Key，再创建一个新的。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>04</span></div>
+</section>
+
+<!-- FIRST TASK -->
+<section class="page">
+  <div class="kicker">第 3 步</div>
+  <h2>发出第一个任务</h2>
+  <img class="shot s75" src="final/01-welcome.jpg" alt="BrowserBuddy 欢迎页和任务输入框">
+  <p class="caption">在中间输入框描述目标，点“发送”或按 ⌘Enter。</p>
+
+  <div class="step"><span class="num">1</span><div><b>把目标说清楚</b><span class="muted">告诉它“去哪里、做什么、要什么结果”。越具体，成功率越高。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>点“发送”</b><span class="muted">App 会打开一个 Chrome 窗口（这是内置浏览器），然后自动开始操作。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>看步骤</b><span class="muted">右侧或对话里会显示 Agent 正在做什么；需要你登录/验证时会暂停并提示。</span></div></div>
+
+  <h3>可以直接复制这些例子</h3>
+  <div class="grid-2">
+    <div class="card"><b>搜索并总结</b><br><span class="muted small">搜索 browser automation，总结前 3 个结果并附上链接。</span></div>
+    <div class="card"><b>小红书</b><br><span class="muted small">打开小红书搜索“露营装备”，整理前 5 篇笔记的标题和链接。</span></div>
+    <div class="card"><b>抖音</b><br><span class="muted small">去抖音看“加减法”的最新作品，给我标题、发布时间和点赞数。</span></div>
+    <div class="card"><b>比价</b><br><span class="muted small">比较淘宝和京东上某款商品的价格，按到手价排序。</span></div>
+  </div>
+
+  <div class="tip">
+    <strong>任务运行时不要关闭 Chrome 窗口。</strong>Agent 正在这个窗口里操作；关掉它，任务就会中断。任务结束后可以正常关闭。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>05</span></div>
+</section>
+
+<!-- RESULT -->
+<section class="page">
+  <div class="kicker">第 4 步</div>
+  <h2>查看结果和来源</h2>
+  <img class="shot s85" src="final/02-chat-result.jpg" alt="任务结果和来源卡片">
+  <p class="caption">结果会整理成可读文本，来源会显示成卡片。点击卡片会在 Chrome 中打开。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3 style="margin-top:0">结果区</h3>
+      <p class="small muted">包含标题、正文、来源和附件。可以复制文本，也可以把结果下载成 Markdown 文件。</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">来源区</h3>
+      <p class="small muted">每个来源显示标题、域名和摘要。点击卡片会在 App 内置的 Chrome 中打开详情页。</p>
+    </div>
+  </div>
+
+  <div class="step"><span class="num">1</span><div><b>点来源卡片</b><span class="muted">详情页在 Chrome 里打开，不会替换 Agent 界面。Chrome 有前进/后退按钮，可以正常浏览。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>关闭 Chrome 不会关闭 App</b><span class="muted">浏览完直接关掉 Chrome 窗口即可，回到 BrowserBuddy 继续提问或新建任务。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>任务运行中先别点</b><span class="muted">如果任务还在运行，点链接会提示“任务运行中”。等任务结束后再点即可。</span></div></div>
+
+  <div class="note">
+    <strong>小红书 / 抖音链接</strong>会使用 App 的已登录浏览器打开。如果提示缺少 <span class="inline-code">xsec_token</span>，重新运行任务，让 Agent 返回带完整参数的链接。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>06</span></div>
+</section>
+
+<!-- LOGIN -->
+<section class="page">
+  <div class="kicker">第 5 步</div>
+  <h2>登录购物 / 内容平台</h2>
+  <img class="shot s80" src="final/06-login-dialog.jpg" alt="登录平台弹窗">
+  <p class="caption">侧边栏点“登录平台”，选择淘宝、京东、小红书或抖音。</p>
+
+  <div class="step"><span class="num">1</span><div><b>选择一个平台</b><span class="muted">App 会打开一个可见的 Chrome 窗口，进入该平台的登录页。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>在 Chrome 里扫码/登录</b><span class="muted">用手机扫码，或按平台提示完成登录。不要在 BrowserBuddy 的聊天框里输入密码。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>登录成功后自动关闭</b><span class="muted">App 检测到新的登录 Cookie 后会自动关闭登录窗口，并把状态更新为“已登录”。</span></div></div>
+
+  <div class="warn">
+    <strong>任务中遇到登录墙怎么办？</strong><br>
+    任务会自动暂停，弹出“登录抖音 / 登录小红书”提示。你完成扫码后它会自动继续，不需要手点“继续任务”。如果扫码失败，可以直接取消任务。
+  </div>
+
+  <div class="tip">
+    <strong>不需要反复登录。</strong>登录状态保存在本机，重启 App 后仍然有效。平台会话过期时，App 会把状态改回“未登录”，并再次暂停让你扫码，不会假装已登录。
+  </div>
+
+  <div class="tip">
+    <strong>安全提示：</strong>App 不保存平台账号密码；付款、验证码、短信确认始终由你本人操作。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>07</span></div>
+</section>
+
+<!-- DATA -->
+<section class="page">
+  <div class="kicker">第 6 步</div>
+  <h2>数据、隐私与卸载</h2>
+  <img class="shot s75" src="final/05-settings-data.jpg" alt="设置里的平台登录和数据卸载">
+  <p class="caption">设置 → 平台登录 / 数据与卸载，可以查看状态、打开数据文件夹或彻底删除本地数据。</p>
+
+  <table class="kv">
+    <tr><td>数据总目录</td><td><span class="inline-code">~/Library/Application Support/BrowserBuddy</span></td></tr>
+    <tr><td>API Key</td><td><span class="inline-code">secrets.json</span>（0600，仅本机）</td></tr>
+    <tr><td>浏览器配置</td><td><span class="inline-code">browser-profile</span>（与你的日常 Chrome 完全隔离）</td></tr>
+    <tr><td>下载文件</td><td><span class="inline-code">downloads</span>，不会动系统“下载”文件夹</td></tr>
+    <tr><td>日志</td><td><span class="inline-code">logs</span>，排查问题时可打开</td></tr>
+  </table>
+
+  <h3>卸载 / 清除数据</h3>
+  <div class="step"><span class="num">1</span><div><b>退出 App</b><span class="muted">按 ⌘Q，或菜单栏退出。App 会关闭自己启动的浏览器。</span></div></div>
+  <div class="step"><span class="num">2</span><div><b>拖到废纸篓</b><span class="muted">打开 Applications，把 BrowserBuddy 拖进废纸篓。应用本体就删除了。</span></div></div>
+  <div class="step"><span class="num">3</span><div><b>清除本地数据（可选）</b><span class="muted">删除前打开 设置 → 数据与卸载 → “彻底删除本地数据”；或在访达中删除整个 Application Support/BrowserBuddy 文件夹。</span></div></div>
+
+  <div class="note">
+    <strong>关于你原来的 Chrome：</strong>App 使用内置 Chromium 和独立 profile，不会读取或修改你日常 Chrome 的书签、密码、Cookie 和插件。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>08</span></div>
+</section>
+
+<!-- FAQ -->
+<section class="page">
+  <div class="kicker">常见问题</div>
+  <h2>遇到问题时先看这里</h2>
+
+  <div class="faq"><b>1. 打开时提示“无法验证开发者”？</b><span class="muted">右键 App → 打开 → 再点“打开”。如果仍被拦截，去“系统设置 → 隐私与安全性”点“仍要打开”。这是未公证版本的正常现象。</span></div>
+  <div class="faq"><b>2. 提示“需要 API Key”或任务没反应？</b><span class="muted">打开设置，确认提供商和 Key 填写正确；Key 通常以 sk- 开头，前后不要有空格。填好后先发送一个简单任务，Key 才会保存。</span></div>
+  <div class="faq"><b>3. 需要自己安装 Chrome / Python 吗？</b><span class="muted">不需要。App 已内置 Chromium 和 Python 运行时。直接拖进 Applications 就能用。</span></div>
+  <div class="faq"><b>4. 弹出的 Google Chrome for Testing 是什么？</b><span class="muted">这是 App 内置的浏览器，不是你的日常 Chrome。任务执行、登录和来源展示都用它；它的窗口有正常的前进/后退。</span></div>
+  <div class="faq"><b>5. 点来源没反应，提示“任务运行中”？</b><span class="muted">Agent 和来源浏览器共用同一个 profile。等任务结束后再点，或者先停止任务。</span></div>
+  <div class="faq"><b>6. 平台显示已登录，任务却要求扫码？</b><span class="muted">说明平台会话已过期。App 会自动把状态改成“未登录”并暂停，扫码成功后会恢复“已登录”。</span></div>
+  <div class="faq"><b>7. Intel Mac 能用吗？</b><span class="muted">当前 2.0 包只支持 Apple Silicon（M 系列）和 macOS 12+。Intel Mac 需要单独构建的 x86_64 版本。</span></div>
+  <div class="faq"><b>8. 下载的文件在哪里？</b><span class="muted">在 App 数据目录的 downloads 文件夹。侧边栏“下载文件夹”或 设置 → 打开下载文件夹 可以直接打开。</span></div>
+  <div class="faq"><b>9. 任务很慢或失败？</b><span class="muted">网站反爬、网络波动、页面改版都可能导致失败。先停止任务重试；把任务拆小、说清楚目标，成功率会更高。</span></div>
+
+  <div class="tip">
+    <strong>反馈问题时，附上：</strong>任务原文、出错截图、设置里的提供商/模型，以及 设置 → 打开日志目录 中的日志。不要发送 API Key。
+  </div>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>09</span></div>
+</section>
+
+<!-- SAFETY -->
+<section class="page">
+  <div class="kicker">安全与版本</div>
+  <h2>让 AI 帮你操作，但关键决定留给自己</h2>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3 style="margin-top:0">建议这样做</h3>
+      <ul class="checklist">
+        <li>重要价格、订单、地址，提交前自己确认</li>
+        <li>付款、验证码、短信确认始终自己操作</li>
+        <li>给 Agent 的任务尽量具体、可验证</li>
+        <li>只在自己有权操作的网站和账号上使用</li>
+      </ul>
+    </div>
+    <div class="card soft">
+      <h3 style="margin-top:0">不要这样做</h3>
+      <ul class="checklist dont">
+        <li>不要在聊天框里输入平台密码</li>
+        <li>不要把 API Key 发给别人或写进公开页面</li>
+        <li>不要用 Agent 绕过网站的安全验证</li>
+        <li>不要让它代替你确认支付或签署协议</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>版本信息</h3>
+  <table class="kv">
+    <tr><td>App 版本</td><td>BrowserBuddy 2.0.0</td></tr>
+    <tr><td>系统要求</td><td>macOS 12+ / Apple Silicon（arm64）</td></tr>
+    <tr><td>浏览器</td><td>内置 Chromium（Google Chrome for Testing）</td></tr>
+    <tr><td>运行时</td><td>内置 CPython 3.11，无需用户安装</td></tr>
+    <tr><td>签名</td><td>ad-hoc 签名，未公证；首次需右键打开</td></tr>
+    <tr><td>安装包</td><td>BrowserBuddy-2.0.dmg（约 227 MB）</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>AI 会犯错。</strong>BrowserBuddy 会尽量核对页面内容，但模型仍可能看错、漏看或做出错误判断。涉及金钱、账号、隐私和法律的决策，请务必人工复核。
+  </div>
+
+  <div class="tip">
+    <strong>把这份说明和 DMG 一起发给朋友：</strong>先看“5 分钟快速开始”，遇到问题再看 FAQ。大多数安装和使用问题都能在前 3 页找到答案。
+  </div>
+
+  <p class="small muted" style="margin-top:10mm">BrowserBuddy 2.0 · 用户安装与使用说明 · 2026 年 11 月</p>
+
+  <div class="footer"><span>BrowserBuddy 2.0 · 安装与使用说明</span><span>10</span></div>
+</section>
+
+</body>
+</html>
