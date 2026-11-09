@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 APP_NAME = 'BrowserBuddy'
@@ -15,7 +17,11 @@ _DATA_DIR_OVERRIDE = os.environ.get('BROWSER_BUDDY_DATA_DIR')
 APP_SUPPORT_DIR = Path(_DATA_DIR_OVERRIDE).expanduser() if _DATA_DIR_OVERRIDE else DEFAULT_APP_SUPPORT_DIR
 
 LOG_DIR = APP_SUPPORT_DIR / 'logs'
-PROFILE_DIR = APP_SUPPORT_DIR / 'browser-profile'
+# browser-use copies a profile to a temp directory unless the path contains
+# this marker. Use the marker on the real profile so every task reuses one
+# persistent profile (no temp copies, no orphaned Chrome instances).
+PROFILE_DIR = APP_SUPPORT_DIR / 'browser-use-user-data-dir-browser-profile'
+LEGACY_PROFILE_DIR = APP_SUPPORT_DIR / 'browser-profile'
 ARTIFACT_DIR = APP_SUPPORT_DIR / 'artifacts'
 HISTORY_DIR = APP_SUPPORT_DIR / 'history'
 BROWSER_STATE_FILE = APP_SUPPORT_DIR / 'storage_state.json'
@@ -87,6 +93,19 @@ def browser_is_available() -> bool:
 	return any(Path(path).is_file() for path in SYSTEM_BROWSER_PATHS)
 
 
+def _cleanup_old_temp_profiles(max_age_seconds: int = 7 * 24 * 3600) -> None:
+	"""Remove stale browser-use profile copies left by older app builds."""
+	root = Path(tempfile.gettempdir())
+	now = time.time()
+	for path in root.glob('browser-use-user-data-dir-*'):
+		try:
+			if now - path.stat().st_mtime < max_age_seconds:
+				continue
+			shutil.rmtree(path, ignore_errors=True)
+		except Exception:
+			continue
+
+
 def _migrate_legacy_logs() -> None:
 	if not LEGACY_LOG_DIR.exists():
 		return
@@ -106,11 +125,17 @@ def _migrate_legacy_logs() -> None:
 def prepare_runtime() -> None:
 	APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
 	LOG_DIR.mkdir(parents=True, exist_ok=True)
+	if LEGACY_PROFILE_DIR.exists() and not PROFILE_DIR.exists():
+		try:
+			LEGACY_PROFILE_DIR.rename(PROFILE_DIR)
+		except Exception:
+			pass
 	PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 	ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 	HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 	DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 	_migrate_legacy_logs()
+	_cleanup_old_temp_profiles()
 
 	if getattr(sys, 'frozen', False):
 		bundled_chromium = bundled_browser_dir()

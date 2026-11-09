@@ -18,6 +18,7 @@ from .config import (
 	ARTIFACT_DIR,
 	BROWSER_STATE_FILE,
 	DOWNLOADS_DIR,
+	LEGACY_PROFILE_DIR,
 	LOG_DIR,
 	PROFILE_DIR,
 	browser_is_available,
@@ -66,7 +67,8 @@ BROWSER_EXECUTABLE = bundled_browser_executable()
 # asks for the password ("Chrome Safe Storage") when it opens a profile with
 # encrypted cookies. Cookies still persist because the app explicitly restores
 # storage_state.json through CDP.
-BROWSER_ARGS = ['--use-mock-keychain']
+BROWSER_ARGS = ['--use-mock-keychain', '--browserbuddy=1']
+BROWSER_SESSION_MARKER = '--browserbuddy=1'
 NO_BROWSER_MESSAGE = '未找到可用的浏览器。请先安装 Google Chrome（https://www.google.com/chrome/），然后重新打开 BrowserBuddy。'
 
 logger = logging.getLogger('browser_buddy.server')
@@ -184,14 +186,16 @@ class ConfirmRequest(BaseModel):
 def _cleanup_stale_browser_profile() -> None:
 	"""Kill leftover BrowserBuddy browser processes and remove stale profile locks.
 
-	Matches both a system Google Chrome and the Chromium shipped inside the app.
+	Matches the persistent profile, the legacy profile, and the app's browser
+	session marker. This also catches browser-use temp-profile copies left by
+	older builds.
 	"""
-	profile_marker = str(PROFILE_DIR)
+	profile_markers = (str(PROFILE_DIR), str(LEGACY_PROFILE_DIR))
 	victims: list[psutil.Process] = []
 	for proc in psutil.process_iter(['pid', 'cmdline']):
 		try:
 			cmdline = ' '.join(proc.info.get('cmdline') or [])
-			if profile_marker not in cmdline:
+			if not any(marker in cmdline for marker in profile_markers) and BROWSER_SESSION_MARKER not in cmdline:
 				continue
 			if any(name in cmdline for name in ('Google Chrome', 'Chromium', 'chrome')):
 				proc.terminate()
@@ -878,6 +882,9 @@ async def _run_agent(request: RunRequest) -> None:
 				await CURRENT_BROWSER.kill()
 			except Exception:
 				pass
+			# Belt-and-braces: kill any orphaned app browser so each task
+			# leaves at most zero or one Chrome instance behind.
+			await asyncio.to_thread(_cleanup_stale_browser_profile)
 			CURRENT_BROWSER = None
 		HUB.publish({'type': 'run_finished', 'duration': round(time.time() - started_at, 1)})
 		if CURRENT_TASK is asyncio.current_task():
