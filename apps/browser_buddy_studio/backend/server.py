@@ -1036,7 +1036,13 @@ async def logout(request: LogoutRequest) -> dict:
 	return {'ok': True, 'site': request.site, 'logins': platform_status()}
 
 
-async def _navigate_view_browser(browser: Browser, url: str) -> None:
+async def _navigate_view_browser(browser: Browser, url: str, new_tab: bool = False) -> None:
+	if new_tab:
+		# Keep previously opened source pages alive instead of replacing them.
+		event = browser.event_bus.dispatch(NavigateToUrlEvent(url=url, new_tab=True))
+		await event
+		await event.event_result(raise_if_any=True, raise_if_none=False)
+		return
 	page = await browser.must_get_current_page()
 	await page.goto(url)
 
@@ -1091,7 +1097,7 @@ async def open_url(request: OpenUrlRequest) -> dict:
 				await _discard_view_browser()
 			else:
 				try:
-					await asyncio.wait_for(_navigate_view_browser(VIEW_SESSION, url), timeout=60)
+					await asyncio.wait_for(_navigate_view_browser(VIEW_SESSION, url, new_tab=True), timeout=60)
 					return {'ok': True}
 				except Exception as e:
 					logger.warning(f'Could not reuse source browser: {type(e).__name__}: {e}')
