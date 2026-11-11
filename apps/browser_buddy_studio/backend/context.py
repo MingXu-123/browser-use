@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field
 
 from browser_use.llm.messages import SystemMessage, UserMessage
 
+from .uploads import load_attachment_summaries
+
 logger = logging.getLogger('browser_buddy.context')
 
 # Only spend an extra LLM call once the rendered history exceeds this size.
@@ -45,6 +47,7 @@ class ContextTurn(BaseModel):
 	text: str = ''
 	links: list[str] = Field(default_factory=list)
 	files: list[str] = Field(default_factory=list)
+	attachments: list[str] = Field(default_factory=list)
 
 
 def clear_thread_summary(thread_id: str) -> None:
@@ -58,10 +61,23 @@ def _normalize(messages: list[ContextTurn] | None) -> list[ContextTurn]:
 		if message.role not in ('user', 'assistant'):
 			continue
 		text = (message.text or '').strip()
-		if not text and not message.links and not message.files:
+		if not text and not message.links and not message.files and not message.attachments:
 			continue
 		turns.append(message)
 	return turns
+
+
+def _with_attachment_summaries(turns: list[ContextTurn]) -> list[ContextTurn]:
+	"""Replace referenced video attachments with their cached summaries."""
+	enriched: list[ContextTurn] = []
+	for turn in turns:
+		if turn.role == 'user' and turn.attachments:
+			summary = load_attachment_summaries(turn.attachments)
+			if summary:
+				text = f'{turn.text}\n\n{summary}' if turn.text else summary
+				turn = turn.model_copy(update={'text': text})
+		enriched.append(turn)
+	return enriched
 
 
 def _render_turn(turn: ContextTurn) -> str:
@@ -156,6 +172,7 @@ async def build_conversation_context(
 	turns = _normalize(messages)
 	if not turns:
 		return '', ''
+	turns = _with_attachment_summaries(turns)
 
 	rendered = [_render_turn(turn) for turn in turns]
 	total_chars = sum(len(item) for item in rendered) + 2 * len(rendered)

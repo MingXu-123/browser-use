@@ -64,7 +64,7 @@ from .storage import (  # noqa: E402
 	save_chat,
 	save_preferences,
 )
-from .transcribe import transcribe_video  # noqa: E402
+from .transcribe import summarize_video, transcribe_video  # noqa: E402
 from .uploads import (  # noqa: E402
 	MAX_FILES,
 	MAX_TOTAL_BYTES,
@@ -863,16 +863,28 @@ async def _run_agent(request: RunRequest) -> None:
 
 		audio_config = _audio_transcription_config(request, key)
 		audio_sections: list[str] = []
+		video_transcripts: dict[str, str] = {}
 		for record in attachment_records:
 			if not record.get('is_video'):
 				continue
+			record_id = str(record.get('id') or '')
 			transcript, error = await transcribe_video(record, audio_config)
 			if transcript:
+				video_transcripts[record_id] = transcript
 				audio_sections.append(f'--- 视频音频转录：{record.get("name")} ---\n{transcript}')
 			else:
 				audio_sections.append(f'--- 视频音频：{record.get("name")} ---\n（{error or "未转录"}）')
 		if audio_sections:
 			attachment_context += '\n\n' + '\n\n'.join(audio_sections)
+
+		for record in attachment_records:
+			if not record.get('is_video'):
+				continue
+			record_id = str(record.get('id') or '')
+			frames = [image for image in attachment_images if image.get('source_id') == record_id]
+			video_summary = await summarize_video(llm, record, frames, video_transcripts.get(record_id, ''))
+			if video_summary:
+				logger.info(f'Video summary ready for {record.get("name")}: {len(video_summary)} chars')
 
 		if (
 			attachment_records

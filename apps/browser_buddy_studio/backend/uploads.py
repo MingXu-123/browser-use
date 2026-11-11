@@ -316,7 +316,7 @@ def load_attachments(ids: list[str] | None) -> list[dict]:
 	return records
 
 
-def _image_payload(path: Path, name: str) -> dict | None:
+def _image_payload(path: Path, name: str, source_id: str = '') -> dict | None:
 	try:
 		image = Image.open(path)
 		image.load()
@@ -338,6 +338,7 @@ def _image_payload(path: Path, name: str) -> dict | None:
 			'name': name,
 			'data': base64.b64encode(buffer.getvalue()).decode('ascii'),
 			'media_type': media_type,
+			'source_id': source_id,
 		}
 	except Exception as e:
 		logger.warning(f'Could not prepare image {path}: {type(e).__name__}: {e}')
@@ -376,7 +377,7 @@ def _video_frame_count(duration: float) -> int:
 	return 20
 
 
-def _video_frame_images(path: Path, name: str, max_frames: int) -> list[dict]:
+def _video_frame_images(path: Path, name: str, max_frames: int, source_id: str = '') -> list[dict]:
 	"""Extract evenly spaced keyframes from a video with the bundled ffmpeg."""
 	if imageio_ffmpeg is None or max_frames <= 0:
 		return []
@@ -424,6 +425,7 @@ def _video_frame_images(path: Path, name: str, max_frames: int) -> list[dict]:
 						'name': f'{name} · {timestamp:.1f}s',
 						'data': base64.b64encode(output.read_bytes()).decode('ascii'),
 						'media_type': 'image/jpeg',
+						'source_id': source_id,
 					}
 				)
 	return frames
@@ -443,14 +445,40 @@ def load_attachment_images(records: list[dict], limit: int = MAX_VISUAL_INPUTS) 
 		if not path.exists():
 			continue
 		name = str(record.get('name') or path.name)
+		source_id = str(record.get('id') or '')
 		if record.get('is_image'):
-			payload = _image_payload(path, name)
+			payload = _image_payload(path, name, source_id)
 			if payload:
 				images.append(payload)
 		elif record.get('is_video'):
 			remaining = limit - len(images)
-			images.extend(_video_frame_images(path, name, min(MAX_VISUAL_INPUTS, remaining)))
+			images.extend(_video_frame_images(path, name, min(MAX_VISUAL_INPUTS, remaining), source_id))
 	return images
+
+
+def load_attachment_summaries(ids: list[str] | None) -> str:
+	"""Return cached summaries for referenced video attachments."""
+	blocks: list[str] = []
+	for raw_id in ids or []:
+		if not isinstance(raw_id, str) or not UPLOAD_ID_RE.fullmatch(raw_id):
+			continue
+		directory = UPLOADS_DIR / raw_id
+		try:
+			meta = json.loads((directory / 'meta.json').read_text(encoding='utf-8'))
+		except Exception:
+			continue
+		if not isinstance(meta, dict) or not meta.get('is_video'):
+			continue
+		summary_path = directory / 'summary.txt'
+		if not summary_path.exists():
+			continue
+		try:
+			summary = summary_path.read_text(encoding='utf-8').strip()
+		except Exception:
+			continue
+		if summary:
+			blocks.append(f'【视频内容摘要：{meta.get("name", "video")}】\n{summary}')
+	return '\n\n'.join(blocks)
 
 
 def format_attachments_for_prompt(records: list[dict]) -> str:

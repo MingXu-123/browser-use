@@ -17,6 +17,8 @@ from typing import Any
 
 import httpx
 
+from browser_use.llm.messages import ContentPartImageParam, ContentPartTextParam, ImageURL, SystemMessage, UserMessage
+
 try:
 	import imageio_ffmpeg  # pyright: ignore[reportMissingImports]
 except ImportError:  # pragma: no cover - the packaged app always ships it
@@ -144,3 +146,72 @@ async def transcribe_video(record: dict[str, Any], config: dict[str, Any] | None
 	except Exception as e:
 		logger.warning(f'Could not cache transcript for {path}: {type(e).__name__}: {e}')
 	return text, None
+
+
+async def summarize_video(
+	llm,
+	record: dict[str, Any],
+	frames: list[dict[str, Any]],
+	transcript: str,
+) -> str:
+	"""Create a reusable summary of a video, cached next to it.
+
+	The current turn already sends keyframes and the full transcript. Later
+	turns only carry this summary, which keeps the conversation context small.
+	"""
+	path = Path(str(record.get('path') or ''))
+	if not path.exists():
+		return ''
+	cache_path = path.parent / 'summary.txt'
+	if cache_path.exists():
+		try:
+			cached = cache_path.read_text(encoding='utf-8').strip()
+			if cached:
+				return cached
+		except Exception:
+			pass
+
+	transcript = (transcript or '').strip()
+	if not frames and not transcript:
+		return ''
+
+	instructions = (
+		f'请为视频 {record.get("name", "video")} 生成一份供后续对话复用的内容摘要。\n'
+		'保留主题、人物或主体、关键事件与时间线、重要数字和结论；不要编造。\n'
+		'控制在 300-500 字，只输出摘要正文。\n\n'
+		f'音频转录（可能为空）：\n{transcript[:12000] or "（无可用语音转录）"}'
+	)
+	content: list[ContentPartTextParam | ContentPartImageParam] = [ContentPartTextParam(text=instructions)]
+	for frame in frames[:8]:
+		content.append(
+			ContentPartImageParam(
+				image_url=ImageURL(
+					url=f'data:{frame["media_type"]};base64,{frame["data"]}',
+					media_type=frame['media_type'],
+					detail='auto',
+				)
+			)
+		)
+
+	summary = ''
+	try:
+		response = await llm.ainvoke(
+			[
+				SystemMessage(content='你负责把视频压缩成简洁、事实性的摘要，供后续多轮对话作为上下文。'),
+				UserMessage(content=content),
+			]
+		)
+		summary = str(getattr(response, 'completion', '') or '').strip()
+	except Exception as e:
+		logger.warning(f'Video summary failed for {path}: {type(e).__name__}: {e}')
+
+	if not summary:
+		summary = transcript[:1200]
+	if not summary:
+		return ''
+	summary = summary[:1600]
+	try:
+		cache_path.write_text(summary, encoding='utf-8')
+	except Exception as e:
+		logger.warning(f'Could not cache video summary for {path}: {type(e).__name__}: {e}')
+	return summary

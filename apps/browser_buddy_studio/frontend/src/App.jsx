@@ -1335,6 +1335,7 @@ function buildContextMessages(messages) {
       const links = [...new Set((result.sources || []).map((source) => source.url).filter(Boolean))]
       const files = (result.files || []).map((file) => file.display_name || file.name).filter(Boolean)
       const attachmentNames = (message.attachments || []).map((item) => item.name).filter(Boolean)
+      const attachmentIds = (message.attachments || []).map((item) => item.id).filter(Boolean)
       const text =
         message.role === 'user'
           ? [
@@ -1349,9 +1350,10 @@ function buildContextMessages(messages) {
         text: text.slice(0, 4000),
         links: links.slice(0, 10),
         files: files.slice(0, 10),
+        attachments: attachmentIds.slice(0, 10),
       }
     })
-    .filter((message) => message.text || message.links.length || message.files.length)
+    .filter((message) => message.text || message.links.length || message.files.length || message.attachments.length)
 }
 
 function TraceList({ steps, running, mode }) {
