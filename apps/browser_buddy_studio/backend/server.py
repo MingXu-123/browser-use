@@ -64,6 +64,7 @@ from .storage import (  # noqa: E402
 	save_chat,
 	save_preferences,
 )
+from .transcribe import transcribe_video  # noqa: E402
 from .uploads import (  # noqa: E402
 	MAX_FILES,
 	MAX_TOTAL_BYTES,
@@ -188,6 +189,8 @@ class RunRequest(BaseModel):
 	# Upload ids returned by POST /api/uploads. Their extracted text is added to
 	# the current task and the original paths are exposed to the Agent.
 	attachments: list[str] | None = None
+	# Transcribe video audio with a saved OpenAI/Gemini key when available.
+	transcribe_audio: bool = True
 	previous_context: str | None = None
 
 
@@ -332,6 +335,26 @@ def _compose_context_block(summary: str, recent: str) -> str:
 	if recent:
 		parts.append(f'最近对话（仅用于理解指代，不是本次目标）：\n{recent}')
 	return '\n\n'.join(parts)
+
+
+def _audio_transcription_config(request: RunRequest, active_key: str) -> dict[str, Any] | None:
+	"""Pick an audio transcription backend from configured provider keys."""
+	if not request.transcribe_audio:
+		return None
+	if request.provider == 'OpenAI':
+		return {'provider': 'OpenAI', 'key': active_key, 'model': 'whisper-1'}
+	if request.provider == 'Google Gemini':
+		return {'provider': 'Google Gemini', 'key': active_key, 'model': request.model}
+
+	# The active model may be text-only (DeepSeek/Anthropic). Reuse a saved
+	# OpenAI or Gemini key for audio without changing the task model.
+	openai_key = get_saved_key('OpenAI')
+	if openai_key:
+		return {'provider': 'OpenAI', 'key': openai_key, 'model': 'whisper-1'}
+	google_key = get_saved_key('Google Gemini')
+	if google_key:
+		return {'provider': 'Google Gemini', 'key': google_key, 'model': 'gemini-3-flash-preview'}
+	return None
 
 
 CONTEXT_OVERFLOW_HINTS = (
@@ -828,6 +851,20 @@ async def _run_agent(request: RunRequest) -> None:
 					)
 				)
 			)
+
+		audio_config = _audio_transcription_config(request, key)
+		audio_sections: list[str] = []
+		for record in attachment_records:
+			if not record.get('is_video'):
+				continue
+			transcript, error = await transcribe_video(record, audio_config)
+			if transcript:
+				audio_sections.append(f'--- 视频音频转录：{record.get("name")} ---\n{transcript}')
+			else:
+				audio_sections.append(f'--- 视频音频：{record.get("name")} ---\n（{error or "未转录"}）')
+		if audio_sections:
+			attachment_context += '\n\n' + '\n\n'.join(audio_sections)
+
 		if (
 			attachment_records
 			and any(item.get('is_image') or item.get('is_video') for item in attachment_records)

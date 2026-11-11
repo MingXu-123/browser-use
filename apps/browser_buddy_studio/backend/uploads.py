@@ -219,7 +219,7 @@ def _extract(path: Path) -> tuple[str, str, bool, str | None, str | None]:
 			if suffix in IMAGE_SUFFIXES:
 				note = '图片文件；视觉模式下会作为图片内容发送给模型，同时保留原始文件用于上传'
 			elif suffix in VIDEO_SUFFIXES:
-				note = '视频文件；视觉模式下会提取关键帧作为图片发送给模型，同时保留原始视频用于上传'
+				note = '视频文件；视觉模式下会提取关键帧，音频会在配置 OpenAI/Gemini Key 后转录；原始视频保留用于上传'
 			else:
 				note = '暂不支持提取该文件类型的文本，原始文件已附加'
 	except Exception as e:
@@ -471,7 +471,7 @@ def format_attachments_for_prompt(records: list[dict]) -> str:
 		if not text and record.get('is_image'):
 			text = '（图片文件；视觉模式下会作为图片内容发送给模型查看）'
 		elif not text and record.get('is_video'):
-			text = '（视频文件；视觉模式下会提取关键帧作为图片发送给模型，音频暂不转录）'
+			text = '（视频文件；视觉模式下会提取关键帧作为图片发送给模型，音频转录结果见下方）'
 		elif not text:
 			detail = record.get('note') or record.get('error') or '没有可读取的文本内容'
 			text = f'（无法提取文本：{detail}）'

@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS = {
   model: 'deepseek-v4-flash',
   headless: false,
   useVision: true,
+  transcribeAudio: true,
   maxSteps: 50,
   searchEngine: 'auto',
   // 0 means "use the provider default advertised by /api/providers".
@@ -1193,6 +1194,17 @@ function SettingsDrawer({
               type="checkbox"
               checked={settings.useVision}
               onChange={(event) => setSettings((prev) => ({ ...prev, useVision: event.target.checked }))}
+            />
+          </label>
+          <label className="toggle-row">
+            <span>
+              <strong>视频音频转录</strong>
+              <small>使用已保存的 OpenAI 或 Google Gemini Key；未配置时只分析画面</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={settings.transcribeAudio !== false}
+              onChange={(event) => setSettings((prev) => ({ ...prev, transcribeAudio: event.target.checked }))}
             />
           </label>
           <label className="field">
@@ -2426,6 +2438,7 @@ export default function App() {
         headless: settings.headless,
         max_steps: settings.maxSteps,
         use_vision: settings.useVision,
+        transcribe_audio: settings.transcribeAudio !== false,
         search_engine: settings.searchEngine || 'auto',
         thread_id: threadId,
         messages: contextMessages.length ? contextMessages : null,
