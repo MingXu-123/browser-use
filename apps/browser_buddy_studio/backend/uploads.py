@@ -14,6 +14,8 @@ import json
 import logging
 import re
 import shutil
+import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +26,11 @@ from docx import Document
 from PIL import Image
 from pydantic import BaseModel
 from pypdf import PdfReader
+
+try:
+	import imageio_ffmpeg  # pyright: ignore[reportMissingImports]
+except ImportError:  # pragma: no cover - the packaged app always ships it
+	imageio_ffmpeg = None
 
 from .config import UPLOADS_DIR
 
@@ -40,10 +47,12 @@ UPLOAD_ID_RE = re.compile(r'^[0-9a-f]{32}$')
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 DOCUMENT_MAX_BYTES = 100 * 1024 * 1024
 SPREADSHEET_MAX_BYTES = 50 * 1024 * 1024
+VIDEO_MAX_BYTES = 200 * 1024 * 1024
 TEXT_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_MAX_BYTES = 20 * 1024 * 1024
 
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.heic'}
+VIDEO_SUFFIXES = {'.mp4', '.mov', '.m4v', '.webm', '.avi', '.mkv'}
 DOCUMENT_SUFFIXES = {'.pdf', '.doc', '.docx', '.ppt', '.pptx'}
 SPREADSHEET_SUFFIXES = {'.xls', '.xlsx', '.csv'}
 
@@ -94,6 +103,7 @@ class UploadedFile(BaseModel):
 	truncated: bool = False
 	kind: str = 'file'
 	is_image: bool = False
+	is_video: bool = False
 	error: str | None = None
 	note: str | None = None
 	url: str = ''
@@ -113,6 +123,8 @@ def max_bytes_for(filename: str | None) -> int:
 	suffix = Path(filename or '').suffix.lower()
 	if suffix in IMAGE_SUFFIXES:
 		return IMAGE_MAX_BYTES
+	if suffix in VIDEO_SUFFIXES:
+		return VIDEO_MAX_BYTES
 	if suffix in SPREADSHEET_SUFFIXES:
 		return SPREADSHEET_MAX_BYTES
 	if suffix in DOCUMENT_SUFFIXES or suffix in TEXT_SUFFIXES or suffix in HTML_SUFFIXES:
@@ -206,6 +218,8 @@ def _extract(path: Path) -> tuple[str, str, bool, str | None, str | None]:
 			text = ''
 			if suffix in IMAGE_SUFFIXES:
 				note = '图片文件；视觉模式下会作为图片内容发送给模型，同时保留原始文件用于上传'
+			elif suffix in VIDEO_SUFFIXES:
+				note = '视频文件；视觉模式下会提取关键帧作为图片发送给模型，同时保留原始视频用于上传'
 			else:
 				note = '暂不支持提取该文件类型的文本，原始文件已附加'
 	except Exception as e:
@@ -235,6 +249,7 @@ def _finalize_upload(upload_id: str, name: str, path: Path, size: int) -> Upload
 		truncated=truncated,
 		kind=kind,
 		is_image=path.suffix.lower() in IMAGE_SUFFIXES,
+		is_video=path.suffix.lower() in VIDEO_SUFFIXES,
 		error=error,
 		note=note,
 		url=f'/uploads/{upload_id}/{quote(name)}',
@@ -300,41 +315,123 @@ def load_attachments(ids: list[str] | None) -> list[dict]:
 	return records
 
 
-def load_attachment_images(records: list[dict], limit: int = 4) -> list[dict]:
-	"""Return downscaled base64 images for vision-capable LLMs."""
+def _image_payload(path: Path, name: str) -> dict | None:
+	try:
+		image = Image.open(path)
+		image.load()
+		if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+			image = image.convert('RGBA')
+			media_type = 'image/png'
+			image_format = 'PNG'
+		else:
+			image = image.convert('RGB')
+			media_type = 'image/jpeg'
+			image_format = 'JPEG'
+		image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+		buffer = io.BytesIO()
+		if image_format == 'JPEG':
+			image.save(buffer, format=image_format, quality=82, optimize=True)
+		else:
+			image.save(buffer, format=image_format, optimize=True)
+		return {
+			'name': name,
+			'data': base64.b64encode(buffer.getvalue()).decode('ascii'),
+			'media_type': media_type,
+		}
+	except Exception as e:
+		logger.warning(f'Could not prepare image {path}: {type(e).__name__}: {e}')
+		return None
+
+
+def _probe_video_duration(ffmpeg: str, path: Path) -> float:
+	try:
+		result = subprocess.run(
+			[ffmpeg, '-hide_banner', '-i', str(path)],
+			capture_output=True,
+			text=True,
+			timeout=20,
+		)
+		match = re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)', result.stderr or '')
+		if match:
+			hours, minutes, seconds = match.groups()
+			return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+	except Exception as e:
+		logger.warning(f'Could not read video duration for {path}: {type(e).__name__}: {e}')
+	return 0.0
+
+
+def _video_frame_images(path: Path, name: str, max_frames: int) -> list[dict]:
+	"""Extract evenly spaced keyframes from a video with the bundled ffmpeg."""
+	if imageio_ffmpeg is None or max_frames <= 0:
+		return []
+	try:
+		ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+	except Exception as e:
+		logger.warning(f'ffmpeg is unavailable: {type(e).__name__}: {e}')
+		return []
+
+	duration = _probe_video_duration(ffmpeg, path)
+	timestamps = [duration * (index + 0.5) / max_frames for index in range(max_frames)] if duration > 0 else [0.0]
+	frames: list[dict] = []
+	with tempfile.TemporaryDirectory(prefix='browserbuddy-video-') as temp_dir:
+		for index, timestamp in enumerate(timestamps):
+			output = Path(temp_dir) / f'frame-{index}.jpg'
+			try:
+				subprocess.run(
+					[
+						ffmpeg,
+						'-y',
+						'-loglevel',
+						'error',
+						'-ss',
+						f'{timestamp:.3f}',
+						'-i',
+						str(path),
+						'-frames:v',
+						'1',
+						'-vf',
+						'scale=1280:-2',
+						'-q:v',
+						'3',
+						str(output),
+					],
+					capture_output=True,
+					timeout=60,
+				)
+			except Exception as e:
+				logger.warning(f'Could not extract frame from {path}: {type(e).__name__}: {e}')
+				continue
+			if output.exists() and output.stat().st_size:
+				frames.append(
+					{
+						'name': f'{name} · {timestamp:.1f}s',
+						'data': base64.b64encode(output.read_bytes()).decode('ascii'),
+						'media_type': 'image/jpeg',
+					}
+				)
+	return frames
+
+
+def load_attachment_images(records: list[dict], limit: int = 8) -> list[dict]:
+	"""Return downscaled base64 images for vision-capable LLMs.
+
+	Images are sent directly. Videos are represented by up to four evenly
+	spaced keyframes. The audio track is not transcribed yet.
+	"""
 	images: list[dict] = []
 	for record in records:
-		if len(images) >= limit or not record.get('is_image'):
-			continue
+		if len(images) >= limit:
+			break
 		path = Path(str(record.get('path') or ''))
 		if not path.exists():
 			continue
-		try:
-			image = Image.open(path)
-			image.load()
-			if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
-				image = image.convert('RGBA')
-				media_type = 'image/png'
-				image_format = 'PNG'
-			else:
-				image = image.convert('RGB')
-				media_type = 'image/jpeg'
-				image_format = 'JPEG'
-			image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
-			buffer = io.BytesIO()
-			if image_format == 'JPEG':
-				image.save(buffer, format=image_format, quality=82, optimize=True)
-			else:
-				image.save(buffer, format=image_format, optimize=True)
-			images.append(
-				{
-					'name': str(record.get('name') or path.name),
-					'data': base64.b64encode(buffer.getvalue()).decode('ascii'),
-					'media_type': media_type,
-				}
-			)
-		except Exception as e:
-			logger.warning(f'Could not prepare image {path}: {type(e).__name__}: {e}')
+		name = str(record.get('name') or path.name)
+		if record.get('is_image'):
+			payload = _image_payload(path, name)
+			if payload:
+				images.append(payload)
+		elif record.get('is_video'):
+			images.extend(_video_frame_images(path, name, min(4, limit - len(images))))
 	return images
 
 
@@ -346,6 +443,8 @@ def format_attachments_for_prompt(records: list[dict]) -> str:
 	for index, record in enumerate(records, 1):
 		if record.get('is_image'):
 			detail = '图片'
+		elif record.get('is_video'):
+			detail = '视频'
 		else:
 			detail = f'{record.get("chars", 0)} 字'
 			if record.get('truncated'):
@@ -358,13 +457,21 @@ def format_attachments_for_prompt(records: list[dict]) -> str:
 	]
 	remaining = MAX_TOTAL_PROMPT_CHARS
 	for index, record in enumerate(records, 1):
-		header = f'--- 文件 {index}: {record.get("name", "file")}（{record.get("chars", 0)} 字'
+		if record.get('is_image'):
+			header_detail = '图片'
+		elif record.get('is_video'):
+			header_detail = '视频'
+		else:
+			header_detail = f'{record.get("chars", 0)} 字'
+		header = f'--- 文件 {index}: {record.get("name", "file")}（{header_detail}'
 		if record.get('truncated'):
 			header += '，内容已截断'
 		header += f'；本地路径：{record.get("path", "")}）---'
 		text = str(record.get('text') or '').strip()
 		if not text and record.get('is_image'):
 			text = '（图片文件；视觉模式下会作为图片内容发送给模型查看）'
+		elif not text and record.get('is_video'):
+			text = '（视频文件；视觉模式下会提取关键帧作为图片发送给模型，音频暂不转录）'
 		elif not text:
 			detail = record.get('note') or record.get('error') or '没有可读取的文本内容'
 			text = f'（无法提取文本：{detail}）'

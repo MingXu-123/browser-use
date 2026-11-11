@@ -97,7 +97,7 @@ cd "$APP_DIR"
 uv venv --python 3.11 --clear .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
-uv pip install -e "$ROOT_DIR" fastapi uvicorn pywebview httpx beautifulsoup4 pyinstaller playwright
+uv pip install -e "$ROOT_DIR" fastapi uvicorn pywebview httpx beautifulsoup4 pyinstaller playwright imageio-ffmpeg
 
 # Some macOS Command Line Tools installs have a mixed-architecture libxcrun.
 # Fall back to the x86_64 slices for tools that PyInstaller invokes.

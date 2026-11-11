@@ -52,6 +52,7 @@ const INPUT_MAX_CHARS = 8000
 const MAX_ATTACHMENTS = 10
 const MAX_TOTAL_ATTACHMENT_MB = 300
 const IMAGE_FILE_LIMIT_MB = 20
+const VIDEO_FILE_LIMIT_MB = 200
 const DEFAULT_FILE_LIMIT_MB = 20
 const FILE_LIMIT_MB = {
   pdf: 100,
@@ -160,24 +161,33 @@ function formatFileSize(bytes) {
 }
 
 const IMAGE_ATTACHMENT_KINDS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'heic'])
+const VIDEO_ATTACHMENT_KINDS = new Set(['mp4', 'mov', 'm4v', 'webm', 'avi', 'mkv'])
 
 function isImageAttachment(attachment) {
   return Boolean(attachment?.is_image) || IMAGE_ATTACHMENT_KINDS.has(String(attachment?.kind || '').toLowerCase())
 }
 
+function isVideoAttachment(attachment) {
+  return Boolean(attachment?.is_video) || VIDEO_ATTACHMENT_KINDS.has(String(attachment?.kind || '').toLowerCase())
+}
+
 function fileLimitMb(file) {
   const extension = (file.name.split('.').pop() || '').toLowerCase()
   if (IMAGE_ATTACHMENT_KINDS.has(extension)) return IMAGE_FILE_LIMIT_MB
+  if (VIDEO_ATTACHMENT_KINDS.has(extension)) return VIDEO_FILE_LIMIT_MB
   return FILE_LIMIT_MB[extension] || DEFAULT_FILE_LIMIT_MB
 }
 
 function fileLimitLabel() {
-  return '图片 20MB，PDF/Word/PPT 100MB，Excel/CSV 50MB，文本 20MB'
+  return '图片 20MB，视频 200MB，PDF/Word/PPT 100MB，Excel/CSV 50MB，文本 20MB'
 }
 
 function attachmentMeta(attachment, visionEnabled = true) {
   if (isImageAttachment(attachment)) {
     return visionEnabled ? `图片 · 视觉模式 · ${formatFileSize(attachment.size)}` : `图片 · 需开启视觉 · ${formatFileSize(attachment.size)}`
+  }
+  if (isVideoAttachment(attachment)) {
+    return visionEnabled ? `视频 · 关键帧 · ${formatFileSize(attachment.size)}` : `视频 · 需开启视觉 · ${formatFileSize(attachment.size)}`
   }
   if (attachment.error) return attachment.error
   if (attachment.chars) {
@@ -1393,6 +1403,8 @@ function UserMessage({ message, onCopy }) {
                       event.currentTarget.style.display = 'none'
                     }}
                   />
+                ) : isVideoAttachment(attachment) ? (
+                  <Icon name="play" size={12} />
                 ) : (
                   <Icon name="file" size={12} />
                 )}
@@ -1532,6 +1544,8 @@ function ChatComposer({
                     event.currentTarget.style.display = 'none'
                   }}
                 />
+              ) : isVideoAttachment(attachment) ? (
+                <Icon name="play" size={13} />
               ) : (
                 <Icon name="file" size={13} />
               )}
@@ -1938,9 +1952,9 @@ export default function App() {
         if (failed.length) {
           warnings.push(...failed.map((file) => `${file.name}: ${file.error}`))
         }
-        const images = uploaded.filter((file) => isImageAttachment(file))
-        if (images.length && !settings.useVision) {
-          warnings.push('图片需要开启「使用网页截图/视觉模式」才能被模型理解')
+        const visual = uploaded.filter((file) => isImageAttachment(file) || isVideoAttachment(file))
+        if (visual.length && !settings.useVision) {
+          warnings.push('图片/视频需要开启「视觉模式」才能被模型理解')
         }
         setAttachmentError(warnings.join('；'))
       } catch (e) {

@@ -828,8 +828,12 @@ async def _run_agent(request: RunRequest) -> None:
 					)
 				)
 			)
-		if attachment_records and any(item.get('is_image') for item in attachment_records) and not request.use_vision:
-			attachment_context += '\n\n注意：视觉模式已关闭，模型无法查看图片内容，只能使用文件路径和文件名。'
+		if (
+			attachment_records
+			and any(item.get('is_image') or item.get('is_video') for item in attachment_records)
+			and not request.use_vision
+		):
+			attachment_context += '\n\n注意：视觉模式已关闭，模型无法查看图片或视频画面，只能使用文件路径和文件名。'
 		intent_task = request.task
 		if attachment_records:
 			names = '、'.join(str(item.get('name') or 'file') for item in attachment_records)
