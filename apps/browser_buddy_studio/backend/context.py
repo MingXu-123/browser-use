@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from browser_use.llm.messages import SystemMessage, UserMessage
 
+from .language import message_language
 from .uploads import load_attachment_summaries
 
 logger = logging.getLogger('browser_buddy.context')
@@ -40,6 +41,11 @@ SUMMARY_INPUT_LIMIT = 12000
 _SUMMARY_CACHE: dict[str, tuple[int, str]] = {}
 
 
+def _cache_key(thread_id: str | None, language: str) -> str | None:
+	"""Keep Chinese and English summaries apart when the user switches language."""
+	return f'{thread_id}:{language}' if thread_id else None
+
+
 class ContextTurn(BaseModel):
 	"""A minimal chat turn sent by the frontend for context building."""
 
@@ -51,7 +57,9 @@ class ContextTurn(BaseModel):
 
 
 def clear_thread_summary(thread_id: str) -> None:
-	"""Drop a cached summary after the thread is edited or deleted."""
+	"""Drop cached summaries after the thread is edited or deleted."""
+	for key in [key for key in _SUMMARY_CACHE if key.startswith(f'{thread_id}:')]:
+		_SUMMARY_CACHE.pop(key, None)
 	_SUMMARY_CACHE.pop(thread_id, None)
 
 
@@ -80,39 +88,46 @@ def _with_attachment_summaries(turns: list[ContextTurn]) -> list[ContextTurn]:
 	return enriched
 
 
-def _render_turn(turn: ContextTurn) -> str:
-	role = '用户' if turn.role == 'user' else '助手'
+def _render_turn(turn: ContextTurn, language: str = 'zh') -> str:
+	if language == 'zh':
+		role = '用户' if turn.role == 'user' else '助手'
+		link_label, file_label = '链接', '文件'
+	else:
+		role = 'User' if turn.role == 'user' else 'Assistant'
+		link_label, file_label = 'Links', 'Files'
 	text = (turn.text or '').strip()
 	if len(text) > PER_TURN_CHAR_LIMIT:
 		text = text[:PER_TURN_CHAR_LIMIT] + '…'
-	parts = [f'{role}：{text}' if text else f'{role}：']
+	separator = '：' if language == 'zh' else ': '
+	parts = [f'{role}{separator}{text}' if text else f'{role}{separator}']
 	if turn.links:
-		parts.append(f'链接：{", ".join(turn.links[:8])}')
+		parts.append(f'{link_label}{separator}{", ".join(turn.links[:8])}')
 	if turn.files:
-		parts.append(f'文件：{", ".join(turn.files[:8])}')
+		parts.append(f'{file_label}{separator}{", ".join(turn.files[:8])}')
 	return '\n'.join(parts)
 
 
-def _render_turns(turns: list[ContextTurn]) -> str:
-	return '\n\n'.join(_render_turn(turn) for turn in turns)
+def _render_turns(turns: list[ContextTurn], language: str = 'zh') -> str:
+	return '\n\n'.join(_render_turn(turn, language) for turn in turns)
 
 
-def _fallback_summary(turns: list[ContextTurn]) -> str:
+def _fallback_summary(turns: list[ContextTurn], language: str = 'zh') -> str:
 	"""Deterministic fallback when the summary LLM call fails."""
-	rendered = _render_turns(turns[-6:])
+	rendered = _render_turns(turns[-6:], language)
 	return rendered[-SUMMARY_CHAR_LIMIT:]
 
 
-async def _summarize(llm, turns: list[ContextTurn], thread_id: str | None) -> str:
+async def _summarize(llm, turns: list[ContextTurn], thread_id: str | None, language: str = 'zh') -> str:
 	if not turns:
 		return ''
 
 	covered = len(turns)
 	previous_summary = ''
 	new_turns = turns
+	cache_key = _cache_key(thread_id, language)
 
-	if thread_id:
-		cached = _SUMMARY_CACHE.get(thread_id)
+	if cache_key:
+		cached = _SUMMARY_CACHE.get(cache_key)
 		if cached is not None:
 			cached_covered, cached_summary = cached
 			if 0 < cached_covered <= covered:
@@ -122,23 +137,39 @@ async def _summarize(llm, turns: list[ContextTurn], thread_id: str | None) -> st
 	if not new_turns:
 		return previous_summary
 
-	history = _render_turns(new_turns)[-SUMMARY_INPUT_LIMIT:]
-	if previous_summary:
-		prompt = (
-			'下面是一段多轮对话的已有摘要，以及新增的对话内容。'
-			'请输出合并后的新摘要，不要解释过程。\n\n'
-			f'已有摘要：\n{previous_summary[:SUMMARY_CHAR_LIMIT]}\n\n'
-			f'新增对话：\n{history}'
+	history = _render_turns(new_turns, language)[-SUMMARY_INPUT_LIMIT:]
+	if language == 'zh':
+		if previous_summary:
+			prompt = (
+				'下面是一段多轮对话的已有摘要，以及新增的对话内容。'
+				'请输出合并后的新摘要，不要解释过程。\n\n'
+				f'已有摘要：\n{previous_summary[:SUMMARY_CHAR_LIMIT]}\n\n'
+				f'新增对话：\n{history}'
+			)
+		else:
+			prompt = f'请把下面这段多轮对话压缩成一份上下文摘要。\n\n{history}'
+		system = (
+			'你负责为浏览器自动化助手压缩对话上下文。'
+			'必须保留：用户提到的具体对象、商品、型号、数量、筛选条件、网站、已确认的结论、'
+			'关键链接和文件名。删除寒暄、重复内容和浏览器执行细节。'
+			'不要编造没有出现过的信息。用中文输出不超过 600 字的要点列表。'
 		)
 	else:
-		prompt = f'请把下面这段多轮对话压缩成一份上下文摘要。\n\n{history}'
-
-	system = (
-		'你负责为浏览器自动化助手压缩对话上下文。'
-		'必须保留：用户提到的具体对象、商品、型号、数量、筛选条件、网站、已确认的结论、'
-		'关键链接和文件名。删除寒暄、重复内容和浏览器执行细节。'
-		'不要编造没有出现过的信息。用中文输出不超过 600 字的要点列表。'
-	)
+		if previous_summary:
+			prompt = (
+				'Below is an existing summary of an earlier multi-turn conversation plus new turns. '
+				'Return the merged summary without explaining your process.\n\n'
+				f'Existing summary:\n{previous_summary[:SUMMARY_CHAR_LIMIT]}\n\n'
+				f'New turns:\n{history}'
+			)
+		else:
+			prompt = f'Compress the multi-turn conversation below into a context summary.\n\n{history}'
+		system = (
+			'You compress conversation context for a browser automation assistant. '
+			'Keep concrete objects, products, models, quantities, filters, websites, confirmed conclusions, '
+			'key links, and filenames. Remove greetings, repetition, and browser execution details. '
+			'Do not invent information. Output a bullet list in English under 600 words.'
+		)
 
 	summary = ''
 	try:
@@ -148,14 +179,14 @@ async def _summarize(llm, turns: list[ContextTurn], thread_id: str | None) -> st
 		logger.warning(f'Context summarization failed: {type(e).__name__}: {e}')
 
 	if not summary:
-		summary = _fallback_summary(new_turns)
+		summary = _fallback_summary(new_turns, language)
 		if previous_summary:
 			summary = f'{previous_summary}\n{summary}'[-SUMMARY_CHAR_LIMIT:]
 	else:
 		summary = summary[:SUMMARY_CHAR_LIMIT]
 
-	if thread_id:
-		_SUMMARY_CACHE[thread_id] = (covered, summary)
+	if cache_key:
+		_SUMMARY_CACHE[cache_key] = (covered, summary)
 	return summary
 
 
@@ -172,9 +203,11 @@ async def build_conversation_context(
 	turns = _normalize(messages)
 	if not turns:
 		return '', ''
+	latest_user_text = next((turn.text for turn in reversed(turns) if turn.role == 'user'), '')
+	language = message_language(latest_user_text)
 	turns = _with_attachment_summaries(turns)
 
-	rendered = [_render_turn(turn) for turn in turns]
+	rendered = [_render_turn(turn, language) for turn in turns]
 	total_chars = sum(len(item) for item in rendered) + 2 * len(rendered)
 
 	if total_chars <= CONTEXT_CHAR_BUDGET:
@@ -183,6 +216,6 @@ async def build_conversation_context(
 	split = max(0, len(turns) - RECENT_TURN_COUNT)
 	older = turns[:split]
 	recent = turns[split:]
-	summary = await _summarize(llm, older, thread_id) if older else ''
-	recent_text = _render_turns(recent)[-CONTEXT_CHAR_BUDGET:]
+	summary = await _summarize(llm, older, thread_id, language) if older else ''
+	recent_text = _render_turns(recent, language)[-CONTEXT_CHAR_BUDGET:]
 	return summary, recent_text
