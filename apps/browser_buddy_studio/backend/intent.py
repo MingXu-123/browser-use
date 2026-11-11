@@ -11,65 +11,30 @@ logger = logging.getLogger('browser_buddy.intent')
 
 URL_RE = re.compile(r'https?://|www\.', re.IGNORECASE)
 
-BROWSER_HINTS = (
+STRONG_BROWSER_HINTS = (
 	'打开',
 	'访问',
-	'搜索',
-	'搜一下',
-	'查询',
-	'查一下',
-	'查查',
 	'登录',
 	'点击',
 	'下载',
 	'上传',
-	'提取',
-	'抓取',
-	'爬取',
-	'比价',
+	'加入购物车',
 	'下单',
 	'购买',
-	'加入购物车',
-	'看评论',
-	'商品',
-	'淘宝',
-	'天猫',
-	'京东',
-	'小红书',
-	'抖音',
-	'rednote',
-	'xiaohongshu',
-	'douyin',
-	'拼多多',
-	'百度',
-	'搜狗',
-	'谷歌',
-	'google',
-	'bing',
-	'github',
-	'youtube',
-	'bilibili',
-	'微博',
-	'知乎',
-	'amazon',
+	'比价',
+	'抓取',
+	'爬取',
 	'open ',
 	'go to ',
 	'visit ',
-	'search ',
 	'click ',
 	'download ',
 	'upload ',
-	'extract ',
-	'scrape ',
-	'compare ',
+	'login ',
+	'add to cart',
 	'buy ',
 	'order ',
-	'login ',
-	'shop ',
-	'find ',
 )
-
-CONTINUATION_PATTERNS = (r'^(继续|继续吧|接着|下一步|然后呢|go on|continue)[!.?。！？ ]*$',)
 
 CHAT_PATTERNS = (
 	r'^(hi|hello|hey|yo)[!.?。！？ ]*$',
@@ -83,36 +48,41 @@ class IntentDecision(BaseModel):
 	reason: str = ''
 
 
-def _quick_classify(text: str, recent_context: str | None = None) -> bool | None:
+def _quick_classify(text: str) -> bool | None:
+	"""Only handle obvious cases; let the LLM judge everything else.
+
+	Keyword shortcuts were too aggressive: "解释一下搜索原理" contains
+	"搜索" but does not need a browser, and short commands like "下载它"
+	were treated as chat by a length rule. High-confidence shortcuts only.
+	"""
 	stripped = text.strip()
 	lower = stripped.lower()
 
+	# A URL is a strong signal that the user wants a page opened/read.
 	if URL_RE.search(stripped):
 		return True
-	if any(hint.lower() in lower for hint in BROWSER_HINTS):
-		return True
+	# Pure greetings/thanks/identity questions are clearly chat.
 	if any(re.fullmatch(pattern, lower.strip()) for pattern in CHAT_PATTERNS):
-		return False
-	if recent_context and any(re.fullmatch(pattern, lower.strip()) for pattern in CONTINUATION_PATTERNS):
-		return True
-	if len(stripped) <= 6:
 		return False
 	return None
 
 
 async def needs_browser(task: str, llm, recent_context: str | None = None) -> bool:
-	quick = _quick_classify(task, recent_context)
+	quick = _quick_classify(task)
 	if quick is not None:
 		return quick
 
 	prompt = (
 		'Decide whether the user request requires controlling a real web browser.\n'
 		'Return needs_browser=true only when the user asks to open/visit a site, search the web, '
-		'click/type/login on a website, download/upload files, extract data from a webpage, compare product prices, '
-		'shop, or otherwise interact with a live browser.\n'
+		'click/type/login on a website, download/upload files to a website, extract data from a webpage, '
+		'compare product prices, shop, or otherwise interact with a live browser.\n'
 		'Return needs_browser=false for greetings, small talk, general knowledge, coding help, explanations, '
 		'writing, translation, math, or other questions that can be answered without a browser.\n'
-		'If previous context exists, use it only to interpret short follow-ups.\n\n'
+		'Uploaded files can be analyzed without a browser. Return false for requests like '
+		'"这个文件是什么", "总结附件", or "识别图片内容" unless the user explicitly asks to upload, '
+		'download, or interact with a website.\n'
+		'If previous context exists, use it only to interpret short follow-ups such as "继续" or "这个".\n\n'
 		f'User message:\n{task}'
 	)
 	if recent_context:
@@ -133,7 +103,10 @@ async def needs_browser(task: str, llm, recent_context: str | None = None) -> bo
 		return bool(decision.needs_browser)
 	except Exception as e:
 		logger.warning(f'Intent classification failed: {type(e).__name__}: {e}')
-		return False
+		# Conservative fallback only when the LLM is unavailable: explicit
+		# browser verbs still beat silently answering in chat mode.
+		lower = task.lower()
+		return bool(URL_RE.search(task) or any(hint.lower() in lower for hint in STRONG_BROWSER_HINTS))
 
 
 async def chat_reply(
