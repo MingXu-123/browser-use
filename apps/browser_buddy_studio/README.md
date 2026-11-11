@@ -147,7 +147,7 @@ If a task hits login, QR code, CAPTCHA, SMS verification, or payment confirmatio
 
 ## Follow-up tasks
 
-Follow-up prompts are sent in the same conversation input. Each new message automatically includes prior user tasks, assistant results, source links, and file names as context. This supports flows like:
+Follow-up prompts are sent in the same conversation input. Each new message automatically includes prior user tasks, assistant results, source links, and file names as context. When a thread grows large, older turns are compacted into a short summary and only the latest few turns are kept verbatim, so earlier results cannot silently override the current request. This supports flows like:
 
 1. Find product links.
 2. Continue to read reviews for those products.

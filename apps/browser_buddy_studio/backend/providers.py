@@ -11,32 +11,40 @@ from .config import APP_SUPPORT_DIR
 
 DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 SECRETS_FILE = APP_SUPPORT_DIR / 'secrets.json'
+DEFAULT_CONTEXT_WINDOW = 128_000
 
 PROVIDERS = {
 	'DeepSeek': {
 		'key_name': 'deepseek-api-key',
 		'default_model': 'deepseek-v4-flash',
 		'placeholder': 'sk-...',
+		# Conservative default; users can override it in Settings for models
+		# with a smaller or larger window.
+		'context_window': 128_000,
 	},
 	'Browser Use': {
 		'key_name': 'browser-use-api-key',
 		'default_model': 'bu-2-0-mini-preview',
 		'placeholder': 'bu-...',
+		'context_window': 128_000,
 	},
 	'OpenAI': {
 		'key_name': 'openai-api-key',
 		'default_model': 'gpt-4.1-mini',
 		'placeholder': 'sk-...',
+		'context_window': 1_000_000,
 	},
 	'Anthropic': {
 		'key_name': 'anthropic-api-key',
 		'default_model': 'claude-sonnet-4-0',
 		'placeholder': 'sk-ant-...',
+		'context_window': 200_000,
 	},
 	'Google Gemini': {
 		'key_name': 'google-api-key',
 		'default_model': 'gemini-3-flash-preview',
 		'placeholder': 'AIza...',
+		'context_window': 1_000_000,
 	},
 }
 
@@ -130,6 +138,7 @@ def provider_list() -> list[dict]:
 				'name': name,
 				'default_model': config['default_model'],
 				'placeholder': config['placeholder'],
+				'context_window': config.get('context_window', DEFAULT_CONTEXT_WINDOW),
 				'has_key': name in _KEY_CACHE or bool(saved_keys.get(config['key_name'])),
 			}
 		)

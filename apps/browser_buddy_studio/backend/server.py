@@ -25,6 +25,7 @@ from .config import (
 	bundled_browser_executable,
 	delete_local_data,
 	frontend_dist,
+	mark_browser_profile_clean,
 	prepare_runtime,
 )
 
@@ -39,6 +40,7 @@ from browser_use.agent.views import ActionResult  # noqa: E402
 from browser_use.browser.events import NavigateToUrlEvent  # noqa: E402
 
 from .artifacts import build_sources, collect_artifacts, repair_xhs_links  # noqa: E402
+from .context import ContextTurn, build_conversation_context, clear_thread_summary  # noqa: E402
 from .intent import chat_reply, needs_browser  # noqa: E402
 from .platform_logins import (  # noqa: E402
 	auth_cookie_signature,
@@ -53,7 +55,7 @@ from .search_tools import build_tools  # noqa: E402
 from .storage import (  # noqa: E402
 	add_history,
 	clear_history,
-	delete_chat,
+	delete_chat_and_artifacts,
 	load_chats,
 	load_history,
 	load_preferences,
@@ -164,6 +166,10 @@ class RunRequest(BaseModel):
 	max_steps: int = 50
 	use_vision: bool = True
 	search_engine: str = 'auto'
+	thread_id: str | None = None
+	# Structured conversation history. Preferred over previous_context because
+	# the backend can summarize older turns and keep the latest ones verbatim.
+	messages: list[ContextTurn] | None = None
 	previous_context: str | None = None
 
 
@@ -177,6 +183,9 @@ class LogoutRequest(BaseModel):
 
 class OpenUrlRequest(BaseModel):
 	url: str
+	# Which UI element asked to open the link. Logged for diagnosing surprise
+	# windows: source-card / markdown / attachment / unknown.
+	source: str | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -230,6 +239,10 @@ def _cleanup_stale_browser_profile() -> None:
 			(PROFILE_DIR / lock_name).unlink(missing_ok=True)
 		except Exception:
 			pass
+
+	# Chrome was terminated rather than closed, so it marks the profile as
+	# crashed. Normalise it so the next launch cannot restore old task tabs.
+	mark_browser_profile_clean()
 
 
 def _forget_platform(site: str) -> None:
@@ -292,6 +305,36 @@ def _language_instruction(task: str) -> str:
 	if _contains_chinese(task):
 		instruction += ' The current task is in Chinese: write the final answer in Chinese.'
 	return instruction
+
+
+def _compose_context_block(summary: str, recent: str) -> str:
+	parts: list[str] = []
+	if summary:
+		parts.append(f'会话摘要（较早的对话，仅作参考）：\n{summary}')
+	if recent:
+		parts.append(f'最近对话（仅用于理解指代，不是本次目标）：\n{recent}')
+	return '\n\n'.join(parts)
+
+
+CONTEXT_OVERFLOW_HINTS = (
+	'context length',
+	'context window',
+	'maximum context',
+	'max context',
+	'too many tokens',
+	'prompt is too long',
+	'token limit',
+	'context_length_exceeded',
+	'exceeds the model',
+	'input is too long',
+	'上下文长度',
+	'超过最大上下文',
+)
+
+
+def _is_context_overflow(message: str) -> bool:
+	lower = message.lower()
+	return any(hint in lower for hint in CONTEXT_OVERFLOW_HINTS)
 
 
 PLATFORM_DOMAINS = (
@@ -415,7 +458,7 @@ async def _request_human_help(
 	require_login = bool(require_login and site)
 	event = asyncio.Event()
 	baseline: set[str] = set()
-	if require_login and browser is not None:
+	if require_login and browser is not None and site is not None:
 		try:
 			baseline = auth_cookie_signature(await browser.cookies(), site)
 		except Exception:
@@ -444,7 +487,7 @@ async def _request_human_help(
 		}
 	)
 	watcher = None
-	if require_login and browser is not None:
+	if require_login and browser is not None and site is not None:
 		watcher = asyncio.create_task(_watch_login_until_ready(browser, site, event, baseline))
 	try:
 		await event.wait()
@@ -595,6 +638,7 @@ async def _close_login_browser(cancelled: bool = False, reason: str = 'manual') 
 		if alive:
 			try:
 				await asyncio.wait_for(browser.kill(), timeout=10)
+				await asyncio.to_thread(mark_browser_profile_clean)
 			except Exception as e:
 				logger.warning(f'Could not close login browser: {type(e).__name__}: {e}')
 				await asyncio.to_thread(_cleanup_stale_browser_profile)
@@ -739,8 +783,19 @@ async def _run_agent(request: RunRequest) -> None:
 
 		llm = build_llm(request.provider, request.model, key)
 
-		if not await needs_browser(request.task, llm, request.previous_context):
-			reply = await chat_reply(llm, request.task, request.previous_context)
+		# Older turns are summarized; the latest turns stay verbatim. The
+		# current request is deliberately kept out of this block so it remains
+		# the only executable goal for the agent.
+		summary = ''
+		recent = ''
+		if request.messages:
+			summary, recent = await build_conversation_context(llm, request.messages, request.thread_id)
+		elif request.previous_context:
+			recent = request.previous_context[-12000:]
+		history_context = _compose_context_block(summary, recent)
+
+		if not await needs_browser(request.task, llm, recent_context=recent or request.previous_context):
+			reply = await chat_reply(llm, request.task, conversation_context=history_context)
 			result = {
 				'text': reply,
 				'sources': [],
@@ -760,11 +815,12 @@ async def _run_agent(request: RunRequest) -> None:
 			raise RuntimeError(NO_BROWSER_MESSAGE)
 
 		agent_task = request.task
-		if request.previous_context:
+		if history_context:
 			agent_task = (
-				'以下是上一次任务的结果，请把它作为上下文继续使用。\n\n'
-				f'{request.previous_context[:12000]}\n\n'
-				f'本次任务：{request.task}'
+				'你正在同一个对话中继续工作。下面的历史信息仅用于理解用户的指代（例如“继续”“这个”“上面那个”）。\n'
+				'历史信息不是本次任务的补充目标：不要延续其中已经完成的操作，也不要用历史里出现过的其他对象替换本次任务中的对象。\n\n'
+				f'{history_context}\n\n'
+				f'本次任务（唯一需要执行的目标）：\n{request.task}'
 			)
 		await asyncio.to_thread(_cleanup_stale_browser_profile)
 		await asyncio.sleep(0.3)
@@ -850,8 +906,9 @@ async def _run_agent(request: RunRequest) -> None:
 
 		history = await agent.run(max_steps=int(request.max_steps), on_step_start=_before_agent_step)
 		text = history.final_result() or '任务完成，但模型没有返回文本结果。'
-		text = repair_xhs_links(text, history.urls())
-		sources = await build_sources(text, history.urls())
+		history_urls = [url for url in history.urls() if url]
+		text = repair_xhs_links(text, history_urls)
+		sources = await build_sources(text, history_urls)
 		files, images = collect_artifacts(history)
 		success = history.is_successful()
 
@@ -874,10 +931,16 @@ async def _run_agent(request: RunRequest) -> None:
 		raise
 	except Exception as e:
 		logger.exception('Task failed')
-		message = f'{type(e).__name__}: {e}'
+		raw = f'{type(e).__name__}: {e}'
+		overflow = _is_context_overflow(raw)
+		message = (
+			'当前请求超过了模型的上下文窗口限制。请新建对话后重试；如果必须保留细节，请把关键约束复制到新对话中。'
+			if overflow
+			else raw
+		)
 		STATE['error'] = message
 		STATE['finished_at'] = time.time()
-		HUB.publish({'type': 'error', 'message': message})
+		HUB.publish({'type': 'error', 'message': message, 'context_overflow': overflow})
 	finally:
 		STATE['running'] = False
 		CURRENT_AGENT = None
@@ -983,11 +1046,12 @@ async def login_start(request: LoginRequest) -> dict:
 			await event
 			await asyncio.wait_for(event.event_result(raise_if_any=True, raise_if_none=False), timeout=20)
 			LOGIN_PREPARE_TASK = asyncio.create_task(_prepare_login_page(request.site, browser))
-		except asyncio.TimeoutError as e:
+		except TimeoutError as e:
 			try:
 				await asyncio.wait_for(browser.kill(), timeout=10)
 			except Exception:
-				await asyncio.to_thread(_cleanup_stale_browser_profile)
+				pass
+			await asyncio.to_thread(_cleanup_stale_browser_profile)
 			raise HTTPException(
 				status_code=500,
 				detail='打开登录窗口超时，请重试；如果反复失败，请确认 Mac 上已安装 Google Chrome。',
@@ -996,7 +1060,8 @@ async def login_start(request: LoginRequest) -> dict:
 			try:
 				await asyncio.wait_for(browser.kill(), timeout=10)
 			except Exception:
-				await asyncio.to_thread(_cleanup_stale_browser_profile)
+				pass
+			await asyncio.to_thread(_cleanup_stale_browser_profile)
 			raise HTTPException(status_code=500, detail=f'打开登录页失败: {type(e).__name__}: {e}') from e
 
 		LOGIN_SESSION = browser
@@ -1067,6 +1132,7 @@ async def _discard_view_browser() -> None:
 		logger.debug(f'Could not save cookies from source browser: {type(e).__name__}: {e}')
 	try:
 		await asyncio.wait_for(browser.kill(), timeout=10)
+		await asyncio.to_thread(mark_browser_profile_clean)
 	except Exception as e:
 		logger.warning(f'Could not close source browser: {type(e).__name__}: {e}')
 		await asyncio.to_thread(_cleanup_stale_browser_profile)
@@ -1082,6 +1148,7 @@ async def open_url(request: OpenUrlRequest) -> dict:
 	parsed = urlparse(url)
 	if parsed.scheme not in ('http', 'https') or not parsed.netloc:
 		raise HTTPException(status_code=400, detail='仅支持 http 或 https 链接')
+	logger.info(f'open-url source={request.source or "unknown"} url={url[:500]}')
 	if not browser_is_available():
 		raise HTTPException(status_code=400, detail=NO_BROWSER_MESSAGE)
 	if CURRENT_TASK is not None and not CURRENT_TASK.done():
@@ -1128,6 +1195,7 @@ async def open_url(request: OpenUrlRequest) -> dict:
 				await browser.kill()
 			except Exception:
 				pass
+			await asyncio.to_thread(_cleanup_stale_browser_profile)
 			raise HTTPException(status_code=500, detail=f'打开来源链接失败: {type(e).__name__}: {e}') from e
 
 		VIEW_SESSION = browser
@@ -1201,8 +1269,13 @@ async def create_chat(thread: dict) -> list[dict]:
 
 @app.delete('/api/chats/{thread_id}')
 async def remove_chat(thread_id: str) -> dict:
-	delete_chat(thread_id)
-	return {'ok': True}
+	if CURRENT_TASK is not None and not CURRENT_TASK.done():
+		raise HTTPException(status_code=409, detail='任务运行中，请等任务结束后再删除对话')
+	# Removes the chat, any legacy history row, and artifacts no other chat
+	# still references. Shared downloads, logs, and login cookies stay.
+	deleted_artifacts = delete_chat_and_artifacts(thread_id)
+	clear_thread_summary(thread_id)
+	return {'ok': True, 'deleted_artifacts': deleted_artifacts}
 
 
 @app.get('/api/history')

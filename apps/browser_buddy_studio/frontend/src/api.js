@@ -37,6 +37,10 @@ export function saveChat(thread) {
   })
 }
 
+export function deleteChat(threadId) {
+  return jsonFetch(`/api/chats/${encodeURIComponent(threadId)}`, { method: 'DELETE' })
+}
+
 export function saveHistoryEntry(entry) {
   return jsonFetch('/api/history', {
     method: 'POST',
@@ -92,10 +96,10 @@ export function logoutPlatform(site) {
   })
 }
 
-export function openUrl(url) {
+export function openUrl(url, source = 'unknown') {
   return jsonFetch('/api/open-url', {
     method: 'POST',
-    body: JSON.stringify({ url }),
+    body: JSON.stringify({ url, source }),
   })
 }
 

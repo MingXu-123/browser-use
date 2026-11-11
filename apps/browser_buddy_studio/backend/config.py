@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -122,6 +123,42 @@ def _migrate_legacy_logs() -> None:
 		pass
 
 
+def mark_browser_profile_clean() -> None:
+	"""Mark the app-owned Chromium profile as cleanly closed.
+
+	browser-use stops Chrome with ``terminate()``, so Chrome records
+	``exit_type=Crashed`` and may offer/perform session restore on the next
+	launch. The app never wants old task tabs to reappear, so normalise the
+	profile before the next launch. Cookies and logins are untouched.
+	"""
+	prefs = PROFILE_DIR / 'Default' / 'Preferences'
+	if not prefs.exists():
+		return
+	try:
+		data = json.loads(prefs.read_text(encoding='utf-8'))
+		if not isinstance(data, dict):
+			return
+		profile = data.setdefault('profile', {})
+		if not isinstance(profile, dict):
+			profile = {}
+			data['profile'] = profile
+		profile['exit_type'] = 'Normal'
+		profile['exited_cleanly'] = True
+		session = data.setdefault('session', {})
+		if not isinstance(session, dict):
+			session = {}
+			data['session'] = session
+		# 5 = open the New Tab page instead of restoring the previous session.
+		session['restore_on_startup'] = 5
+		session['startup_urls'] = []
+		temp = prefs.with_suffix('.tmp')
+		temp.write_text(json.dumps(data, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+		temp.replace(prefs)
+	except Exception:
+		# A malformed/locked Preferences file must never block startup.
+		pass
+
+
 def prepare_runtime() -> None:
 	APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
 	LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -136,6 +173,7 @@ def prepare_runtime() -> None:
 	DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 	_migrate_legacy_logs()
 	_cleanup_old_temp_profiles()
+	mark_browser_profile_clean()
 
 	if getattr(sys, 'frozen', False):
 		bundled_chromium = bundled_browser_dir()

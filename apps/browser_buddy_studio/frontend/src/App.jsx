@@ -6,6 +6,7 @@ import {
   cancelLogin,
   connectEvents,
   continueHuman,
+  deleteChat,
   deleteLocalData,
   finishLogin,
   getChats,
@@ -40,7 +41,18 @@ const DEFAULT_SETTINGS = {
   useVision: true,
   maxSteps: 50,
   searchEngine: 'auto',
+  // 0 means "use the provider default advertised by /api/providers".
+  contextWindow: 0,
 }
+
+// A single message is capped so one pasted document cannot blow up the prompt.
+const INPUT_MAX_CHARS = 8000
+// The warning is driven by the model's context window, not by turn count. A
+// few dozen short turns are harmless; a few long code-heavy turns are not.
+const CONTEXT_INFO_RATIO = 0.6
+const CONTEXT_WARN_RATIO = 0.8
+const CONTEXT_CRITICAL_RATIO = 0.95
+const FALLBACK_CONTEXT_WINDOW = 128000
 
 const SEARCH_ENGINES = [
   { value: 'auto', label: '自动（优先 Bing）' },
@@ -61,17 +73,63 @@ function platformLabel(site) {
   return { taobao: '淘宝', jd: '京东', xiaohongshu: '小红书', douyin: '抖音' }[site] || ''
 }
 
-function buildPreviousContext(followUp) {
-  const links = [...new Set((followUp.sources || []).map((source) => source.url).filter(Boolean))]
-  const files = (followUp.files || []).map((file) => file.display_name || file.name).filter(Boolean)
-  return [
-    `上一次任务：${followUp.task}`,
-    `上一次结果：\n${(followUp.text || '').slice(0, 8000)}`,
-    links.length ? `相关链接：\n${links.join('\n')}` : '',
-    files.length ? `相关文件：${files.join(', ')}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+function estimateTextTokens(text) {
+  if (!text) return 0
+  let tokens = 0
+  let asciiRun = 0
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i)
+    // CJK, Japanese Kana, and Hangul are roughly one token per character.
+    const dense =
+      (code >= 0x3400 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0x3040 && code <= 0x30ff) ||
+      (code >= 0xac00 && code <= 0xd7af)
+    if (dense) {
+      tokens += 1
+      asciiRun = 0
+    } else {
+      asciiRun += 1
+      if (asciiRun === 4) {
+        tokens += 1
+        asciiRun = 0
+      }
+    }
+  }
+  if (asciiRun > 0) tokens += 1
+  return tokens
+}
+
+function threadContextStats(messages) {
+  let chars = 0
+  let tokens = 0
+  let turns = 0
+  for (const message of messages || []) {
+    if (message.role === 'user') {
+      const text = message.text || ''
+      chars += text.length
+      tokens += estimateTextTokens(text) + 4
+    } else if (message.role === 'assistant') {
+      const result = message.result || {}
+      const text = result.text || ''
+      chars += text.length
+      tokens += estimateTextTokens(text) + 4
+      for (const source of result.sources || []) {
+        tokens += estimateTextTokens(`${source.title || ''} ${source.url || ''}`) + 2
+      }
+      for (const file of result.files || []) {
+        tokens += estimateTextTokens(file.display_name || file.name || '') + 2
+      }
+    }
+    turns += 1
+  }
+  return { chars, tokens, turns }
+}
+
+function formatTokenCount(value) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`
+  if (value >= 1000) return `${Math.round(value / 1000)}k`
+  return String(Math.round(value))
 }
 
 function formatTime(value) {
@@ -153,11 +211,17 @@ function StatusPill({ running, result, error }) {
   return null
 }
 
-function Sidebar({ history, activeId, onNew, onSelect, onSettings, onDownloads, onLogin, loginActive, loginSite, platforms, theme, setTheme, providers, settings }) {
+function Sidebar({ history, activeId, onNew, onSelect, onDelete, busy, onSettings, onDownloads, onLogin, loginActive, loginSite, platforms, theme, setTheme, providers, settings }) {
   const groups = groupHistory(history)
   const providerInfo = providers.find((item) => item.name === settings.provider)
   const apiReady = Boolean(providerInfo?.has_key)
   const loggedInCount = (platforms || []).filter((item) => item.logged_in).length
+  const [confirmId, setConfirmId] = useState(null)
+
+  useEffect(() => {
+    // Never leave a delete confirmation hanging when a task starts.
+    if (busy) setConfirmId(null)
+  }, [busy])
 
   return (
     <aside className="sidebar">
@@ -196,17 +260,59 @@ function Sidebar({ history, activeId, onNew, onSelect, onSettings, onDownloads, 
             <div key={label} className="history-group">
               <div className="history-label">{label}</div>
               {items.map((item) => (
-                <button key={item.id} className={`history-item ${item.id === activeId ? 'active' : ''}`} onClick={() => onSelect(item)}>
-                  <span className={`history-icon ${item.result?.success === false ? 'failed' : ''}`}>
-                    {item.result?.success === false ? <Icon name="x" size={12} /> : <Icon name="check" size={12} />}
-                  </span>
-                  <span className="history-body">
-                    <span className="history-task">{item.task}</span>
-                    <span className="history-meta">
-                      {item.provider} · {formatTime(item.ts)}
-                    </span>
-                  </span>
-                </button>
+                <div key={item.id} className={`history-row ${item.id === activeId ? 'active' : ''}`}>
+                  {confirmId === item.id && !busy ? (
+                    <div className="history-confirm">
+                      <span>删除这条对话？</span>
+                      <div className="history-confirm-actions">
+                        <button className="soft-chip" onClick={() => setConfirmId(null)}>
+                          取消
+                        </button>
+                        <button
+                          className="soft-chip danger"
+                          onClick={() => {
+                            setConfirmId(null)
+                            onDelete(item.id)
+                          }}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        className={`history-item ${item.id === activeId ? 'active' : ''}`}
+                        onClick={(event) => {
+                          // Never let a conversation switch reach the document
+                          // link handler.
+                          event.stopPropagation()
+                          setConfirmId(null)
+                          onSelect(item)
+                        }}
+                      >
+                        <span className={`history-icon ${item.result?.success === false ? 'failed' : ''}`}>
+                          {item.result?.success === false ? <Icon name="x" size={12} /> : <Icon name="check" size={12} />}
+                        </span>
+                        <span className="history-body">
+                          <span className="history-task">{item.task}</span>
+                          <span className="history-meta">
+                            {item.provider} · {formatTime(item.ts)}
+                          </span>
+                        </span>
+                      </button>
+                      {!busy && (
+                        <button
+                          className="history-delete"
+                          title="删除这条对话"
+                          onClick={() => setConfirmId(item.id)}
+                        >
+                          <Icon name="trash" size={13} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
               ))}
             </div>
           ))
@@ -420,15 +526,22 @@ function Markdown({ text }) {
     const anchor = event.target.closest?.('a')
     if (!anchor) return
     const href = anchor.getAttribute('href') || ''
-    if (!isLoggedInSource(href)) return
+    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return
+    let url
+    try {
+      url = new URL(href, window.location.href)
+    } catch {
+      return
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return
     event.preventDefault()
     setOpenError('')
-    if (lacksXiaohongshuToken(href)) {
+    if (lacksXiaohongshuToken(url.href)) {
       setOpenError('该小红书链接缺少访问令牌 xsec_token，桌面端会显示 404。请重新运行任务，让来源返回带 xsec_token 的完整链接。')
       return
     }
     try {
-      await openUrl(href)
+      await openUrl(url.href, 'markdown')
     } catch (error) {
       setOpenError(error.message || '打开链接失败')
     }
@@ -473,7 +586,6 @@ function SourceCard({ source }) {
   const [openError, setOpenError] = useState('')
 
   async function handleClick(event) {
-    if (!usesLoggedInBrowser) return
     event.preventDefault()
     if (opening) return
     setOpenError('')
@@ -483,7 +595,7 @@ function SourceCard({ source }) {
     }
     setOpening(true)
     try {
-      await openUrl(source.url)
+      await openUrl(source.url, 'source-card')
     } catch (error) {
       setOpenError(error.message || '打开失败')
     } finally {
@@ -933,6 +1045,7 @@ function SettingsDrawer({
                   ...prev,
                   provider,
                   model: info?.default_model || prev.model,
+                  contextWindow: 0,
                 }))
                 setApiKey('')
               }}
@@ -950,6 +1063,23 @@ function SettingsDrawer({
               value={settings.model}
               onChange={(event) => setSettings((prev) => ({ ...prev, model: event.target.value }))}
               placeholder={providerInfo?.default_model || 'model-name'}
+            />
+          </label>
+          <label className="field">
+            <span>上下文窗口（tokens，留空使用默认）</span>
+            <input
+              type="number"
+              min="8000"
+              step="1000"
+              value={settings.contextWindow || ''}
+              onChange={(event) =>
+                setSettings((prev) => ({ ...prev, contextWindow: Math.max(0, Number(event.target.value) || 0) }))
+              }
+              placeholder={
+                providerInfo?.context_window
+                  ? `${providerInfo.context_window.toLocaleString()}（默认）`
+                  : String(FALLBACK_CONTEXT_WINDOW)
+              }
             />
           </label>
           <label className="field">
@@ -1124,26 +1254,21 @@ function newId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function buildThreadContext(messages) {
-  const parts = []
-  for (const message of messages || []) {
-    if (message.role === 'user') {
-      parts.push(`用户：${message.text}`)
-    } else if (message.role === 'assistant' && message.result) {
-      const links = [...new Set((message.result.sources || []).map((source) => source.url).filter(Boolean))]
-      const files = (message.result.files || []).map((file) => file.display_name || file.name).filter(Boolean)
-      parts.push(
-        [
-          `助手：${(message.result.text || '').slice(0, 6000)}`,
-          links.length ? `链接：${links.join(', ')}` : '',
-          files.length ? `文件：${files.join(', ')}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-      )
-    }
-  }
-  return parts.join('\n\n').slice(-16000)
+function buildContextMessages(messages) {
+  return (messages || [])
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .map((message) => {
+      const result = message.result || {}
+      const links = [...new Set((result.sources || []).map((source) => source.url).filter(Boolean))]
+      const files = (result.files || []).map((file) => file.display_name || file.name).filter(Boolean)
+      return {
+        role: message.role,
+        text: ((message.role === 'user' ? message.text : result.text) || '').slice(0, 4000),
+        links: links.slice(0, 10),
+        files: files.slice(0, 10),
+      }
+    })
+    .filter((message) => message.text || message.links.length || message.files.length)
 }
 
 function TraceList({ steps, running }) {
@@ -1289,6 +1414,7 @@ function ChatComposer({ value, onChange, onSend, onStop, running, disabled, sett
         }}
         placeholder={placeholder}
         rows={3}
+        maxLength={INPUT_MAX_CHARS}
       />
       <div className="chat-composer-footer">
         <div className="composer-options">
@@ -1304,6 +1430,11 @@ function ChatComposer({ value, onChange, onSend, onStop, running, disabled, sett
             <Icon name="search" size={14} />
             {searchEngineLabel(settings.searchEngine)}
           </span>
+          {value.length >= 2000 && (
+            <span className={`char-counter ${value.length >= INPUT_MAX_CHARS ? 'limit' : ''}`}>
+              {value.length.toLocaleString()} / {INPUT_MAX_CHARS.toLocaleString()}
+            </span>
+          )}
           {running && (
             <span className="soft-chip running-chip">
               <Icon name="loader" size={14} className="spin" />
@@ -1415,12 +1546,25 @@ function ChatView({
   onDownloads,
   onCopy,
   onDownload,
+  onNew,
+  contextWindow,
   disabled,
   settings,
 }) {
   const bottomRef = useRef(null)
   const lastAssistant = [...(thread.messages || [])].reverse().find((message) => message.role === 'assistant')
   const lastResult = lastAssistant?.result
+  const windowSize = contextWindow > 0 ? contextWindow : FALLBACK_CONTEXT_WINDOW
+  const contextStats = useMemo(() => threadContextStats(thread.messages), [thread.messages])
+  const contextRatio = windowSize > 0 ? contextStats.tokens / windowSize : 0
+  const contextLevel =
+    contextRatio >= CONTEXT_CRITICAL_RATIO
+      ? 'critical'
+      : contextRatio >= CONTEXT_WARN_RATIO
+        ? 'warn'
+        : contextRatio >= CONTEXT_INFO_RATIO
+          ? 'info'
+          : null
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -1477,6 +1621,30 @@ function ChatView({
       </div>
 
       <div className="chat-composer-wrap">
+        {contextLevel && (
+          <div className={`context-warning ${contextLevel}`}>
+            <Icon name="alert" size={16} />
+            <div>
+              <strong>
+                {contextLevel === 'critical'
+                  ? '上下文接近模型窗口上限'
+                  : contextLevel === 'warn'
+                    ? '上下文已使用较多'
+                    : '这段对话已经比较长'}
+              </strong>
+              <span>
+                按完整历史估算约 {formatTokenCount(contextStats.tokens)} / {formatTokenCount(windowSize)} tokens
+                （{Math.round(contextRatio * 100)}%）。
+                {contextLevel === 'critical'
+                  ? '继续可能触发模型窗口限制，请新建对话后继续。'
+                  : '执行时会自动压缩较早内容；如果发现模型开始忘记早期约束，建议新建对话。'}
+              </span>
+            </div>
+            <button className="soft-chip" onClick={onNew}>
+              新建对话
+            </button>
+          </div>
+        )}
         <ChatComposer
           value={draft}
           onChange={setDraft}
@@ -1543,7 +1711,7 @@ export default function App() {
       if (event.defaultPrevented) return
       const target = event.target
       const anchor = target instanceof Element ? target.closest('a[href]') : null
-      if (!anchor) return
+      if (!anchor || !anchor.closest('.chat-thread')) return
       const raw = anchor.getAttribute('href') || ''
       if (!raw || raw.startsWith('#') || raw.startsWith('javascript:')) return
       let url
@@ -1555,7 +1723,7 @@ export default function App() {
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return
       event.preventDefault()
       event.stopPropagation()
-      openUrl(url.href).catch((error) => showToast(error.message || '打开链接失败'))
+      openUrl(url.href, 'attachment').catch((error) => showToast(error.message || '打开链接失败'))
     }
 
     document.addEventListener('click', handleDocumentClick)
@@ -1566,6 +1734,12 @@ export default function App() {
     () => threads.find((thread) => thread.id === activeThreadId) || null,
     [threads, activeThreadId],
   )
+
+  const contextWindow = useMemo(() => {
+    if (settings.contextWindow > 0) return settings.contextWindow
+    const provider = providers.find((item) => item.name === settings.provider)
+    return provider?.context_window || FALLBACK_CONTEXT_WINDOW
+  }, [settings.contextWindow, settings.provider, providers])
 
   const sidebarEntries = useMemo(
     () =>
@@ -1710,6 +1884,7 @@ export default function App() {
         return
       }
       if (event.type === 'error') {
+        if (event.context_overflow) showToast('上下文超过模型窗口，请新建对话')
         appendAssistant({
           text: `运行失败：${event.message}`,
           sources: [],
@@ -1863,6 +2038,26 @@ export default function App() {
     pendingThreadRef.current = null
   }
 
+  async function handleDeleteThread(threadId) {
+    if (running) return
+    try {
+      const result = await deleteChat(threadId)
+      setThreads((prev) => prev.filter((thread) => thread.id !== threadId))
+      if (pendingThreadRef.current === threadId) pendingThreadRef.current = null
+      if (activeThreadId === threadId) {
+        setActiveThreadId(null)
+        setDraft('')
+        setLiveSteps([])
+        liveStepsRef.current = []
+        setError('')
+      }
+      const artifactCount = Array.isArray(result?.deleted_artifacts) ? result.deleted_artifacts.length : 0
+      showToast(artifactCount ? `已删除对话，并清理 ${artifactCount} 个附件` : '已删除对话')
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   async function sendMessage(text) {
     const clean = (text || '').trim()
     if (!clean || running) return
@@ -1873,7 +2068,7 @@ export default function App() {
 
     const now = Date.now()
     const current = activeThread
-    const previousContext = buildThreadContext(current?.messages || [])
+    const contextMessages = buildContextMessages(current?.messages || [])
     const threadId = current?.id || newId()
     const userMessage = { role: 'user', text: clean, ts: now }
     const updatedThread = current
@@ -1918,7 +2113,8 @@ export default function App() {
         max_steps: settings.maxSteps,
         use_vision: settings.useVision,
         search_engine: settings.searchEngine || 'auto',
-        previous_context: previousContext || null,
+        thread_id: threadId,
+        messages: contextMessages.length ? contextMessages : null,
       })
       if (apiKey) {
         setProviders((prev) =>
@@ -2040,6 +2236,8 @@ export default function App() {
         activeId={activeThreadId}
         onNew={newChat}
         onSelect={(entry) => selectThread(entry.id)}
+        onDelete={handleDeleteThread}
+        busy={running}
         onSettings={() => setSettingsOpen(true)}
         onDownloads={openDownloads}
         onLogin={() => {
@@ -2071,6 +2269,8 @@ export default function App() {
             onDownloads={openDownloads}
             onCopy={handleCopy}
             onDownload={handleDownload}
+            onNew={newChat}
+            contextWindow={contextWindow}
             disabled={loginActive}
             settings={settings}
           />

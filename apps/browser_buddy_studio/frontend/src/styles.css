@@ -238,6 +238,10 @@ button {
   margin-bottom: 6px;
 }
 
+.history-row {
+  position: relative;
+}
+
 .history-item {
   width: 100%;
   display: flex;
@@ -245,11 +249,56 @@ button {
   align-items: flex-start;
   text-align: left;
   padding: 8px;
+  padding-right: 30px;
   border: 0;
   border-radius: 9px;
   background: transparent;
   color: var(--text-soft);
   transition: background 0.15s;
+}
+
+.history-delete {
+  position: absolute;
+  top: 6px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.history-row:hover .history-delete,
+.history-row:focus-within .history-delete {
+  opacity: 1;
+}
+
+.history-delete:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.history-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  border-radius: 9px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.history-confirm-actions {
+  display: flex;
+  gap: 6px;
 }
 
 .history-item:hover {
@@ -1915,6 +1964,65 @@ button {
   flex: 0 0 auto;
   padding: 12px 24px 18px;
   background: linear-gradient(to top, var(--bg) 62%, transparent);
+}
+
+.context-warning {
+  width: min(920px, calc(100% - 48px));
+  margin: 0 auto 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.context-warning.warn {
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--border));
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+}
+
+.context-warning.critical {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--border));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.context-warning > div {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.context-warning strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.context-warning span {
+  color: var(--text-soft);
+}
+
+.context-warning .soft-chip {
+  flex: 0 0 auto;
+}
+
+.char-counter {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.char-counter.limit {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .chat-composer {

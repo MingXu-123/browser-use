@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import unquote
 
@@ -42,7 +43,7 @@ def _domain_matches(domain: str, domains: tuple[str, ...]) -> bool:
 	return any(normalized == item or normalized.endswith(f'.{item}') for item in domains)
 
 
-def _cookie_is_live(cookie: dict[str, Any], now: float) -> bool:
+def _cookie_is_live(cookie: Mapping[str, Any], now: float) -> bool:
 	expires = cookie.get('expires', -1)
 	if expires in (None, -1, 0):
 		return True
@@ -52,7 +53,7 @@ def _cookie_is_live(cookie: dict[str, Any], now: float) -> bool:
 		return True
 
 
-def _matching_cookies(cookies: list[dict[str, Any]], site: str) -> list[dict[str, Any]]:
+def _matching_cookies(cookies: Sequence[Mapping[str, Any]], site: str) -> list[Mapping[str, Any]]:
 	info = PLATFORMS.get(site)
 	if not info:
 		return []
@@ -64,13 +65,13 @@ def _matching_cookies(cookies: list[dict[str, Any]], site: str) -> list[dict[str
 	]
 
 
-def has_auth_cookie(cookies: list[dict[str, Any]], site: str, now: float | None = None) -> bool:
+def has_auth_cookie(cookies: Sequence[Mapping[str, Any]], site: str, now: float | None = None) -> bool:
 	"""Return True when a live login cookie for this platform is present."""
 	now = time.time() if now is None else now
 	return any(_cookie_is_live(cookie, now) for cookie in _matching_cookies(cookies, site))
 
 
-def auth_cookie_signature(cookies: list[dict[str, Any]], site: str, now: float | None = None) -> set[str]:
+def auth_cookie_signature(cookies: Sequence[Mapping[str, Any]], site: str, now: float | None = None) -> set[str]:
 	"""Fingerprint of the live login cookies, used to detect a *new* session.
 
 	A cookie that was already present when the login wall appeared is stale;
@@ -84,7 +85,7 @@ def auth_cookie_signature(cookies: list[dict[str, Any]], site: str, now: float |
 	}
 
 
-def account_from_cookies(cookies: list[dict[str, Any]], site: str) -> str:
+def account_from_cookies(cookies: Sequence[Mapping[str, Any]], site: str) -> str:
 	info = PLATFORMS.get(site)
 	if not info:
 		return ''
@@ -132,7 +133,8 @@ def record_login(site: str, success: bool) -> None:
 	if site not in PLATFORMS:
 		return
 	records = read_records()
-	entry = records.get(site) if isinstance(records.get(site), dict) else {}
+	raw_entry = records.get(site)
+	entry = raw_entry if isinstance(raw_entry, dict) else {}
 	entry['logged_in'] = bool(success)
 	entry['updated_at'] = time.time()
 	if success:
@@ -189,9 +191,7 @@ def forget_site(site: str) -> bool:
 		payload = None
 	if isinstance(payload, dict) and isinstance(payload.get('cookies'), list):
 		cookies = [cookie for cookie in payload['cookies'] if isinstance(cookie, dict)]
-		kept = [
-			cookie for cookie in cookies if not _domain_matches(str(cookie.get('domain', '')), info['domains'])
-		]
+		kept = [cookie for cookie in cookies if not _domain_matches(str(cookie.get('domain', '')), info['domains'])]
 		removed = len(kept) != len(cookies)
 		payload['cookies'] = kept
 		try:
@@ -218,7 +218,8 @@ def invalidate_login(site: str, reason: str = '') -> None:
 		return
 	remove_auth_cookies(site)
 	records = read_records()
-	entry = records.get(site) if isinstance(records.get(site), dict) else {}
+	raw_entry = records.get(site)
+	entry = raw_entry if isinstance(raw_entry, dict) else {}
 	entry['logged_in'] = False
 	entry['invalidated_at'] = time.time()
 	entry['updated_at'] = entry['invalidated_at']
@@ -235,15 +236,12 @@ def platform_status() -> list[dict[str, Any]]:
 	now = time.time()
 	result: list[dict[str, Any]] = []
 	for site, info in PLATFORMS.items():
-		entry = records.get(site) if isinstance(records.get(site), dict) else {}
+		raw_entry = records.get(site)
+		entry = raw_entry if isinstance(raw_entry, dict) else {}
 		# A cookie alone is not proof of a login: Xiaohongshu hands web_session
 		# to anonymous visitors. Require a session that was actually recorded
 		# after a verified login.
-		alive = (
-			bool(entry.get('logged_in'))
-			and has_auth_cookie(cookies, site, now)
-			and not entry.get('invalidated_at')
-		)
+		alive = bool(entry.get('logged_in')) and has_auth_cookie(cookies, site, now) and not entry.get('invalidated_at')
 		result.append(
 			{
 				'site': site,

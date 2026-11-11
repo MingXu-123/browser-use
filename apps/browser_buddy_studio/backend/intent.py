@@ -69,9 +69,7 @@ BROWSER_HINTS = (
 	'find ',
 )
 
-CONTINUATION_PATTERNS = (
-	r'^(继续|继续吧|接着|下一步|然后呢|go on|continue)[!.?。！？ ]*$',
-)
+CONTINUATION_PATTERNS = (r'^(继续|继续吧|接着|下一步|然后呢|go on|continue)[!.?。！？ ]*$',)
 
 CHAT_PATTERNS = (
 	r'^(hi|hello|hey|yo)[!.?。！？ ]*$',
@@ -85,7 +83,7 @@ class IntentDecision(BaseModel):
 	reason: str = ''
 
 
-def _quick_classify(text: str, previous_context: str | None = None) -> bool | None:
+def _quick_classify(text: str, recent_context: str | None = None) -> bool | None:
 	stripped = text.strip()
 	lower = stripped.lower()
 
@@ -95,15 +93,15 @@ def _quick_classify(text: str, previous_context: str | None = None) -> bool | No
 		return True
 	if any(re.fullmatch(pattern, lower.strip()) for pattern in CHAT_PATTERNS):
 		return False
-	if previous_context and any(re.fullmatch(pattern, lower.strip()) for pattern in CONTINUATION_PATTERNS):
+	if recent_context and any(re.fullmatch(pattern, lower.strip()) for pattern in CONTINUATION_PATTERNS):
 		return True
 	if len(stripped) <= 6:
 		return False
 	return None
 
 
-async def needs_browser(task: str, llm, previous_context: str | None = None) -> bool:
-	quick = _quick_classify(task, previous_context)
+async def needs_browser(task: str, llm, recent_context: str | None = None) -> bool:
+	quick = _quick_classify(task, recent_context)
 	if quick is not None:
 		return quick
 
@@ -117,8 +115,10 @@ async def needs_browser(task: str, llm, previous_context: str | None = None) -> 
 		'If previous context exists, use it only to interpret short follow-ups.\n\n'
 		f'User message:\n{task}'
 	)
-	if previous_context:
-		prompt += f'\n\nPrevious context (truncated):\n{previous_context[:2000]}'
+	if recent_context:
+		# Keep the *latest* part of the context: short follow-ups refer to the
+		# most recent exchange, not to the beginning of the thread.
+		prompt += f'\n\nMost recent conversation context:\n{recent_context[-2000:]}'
 
 	try:
 		response = await llm.ainvoke(
@@ -136,7 +136,7 @@ async def needs_browser(task: str, llm, previous_context: str | None = None) -> 
 		return False
 
 
-async def chat_reply(llm, task: str, previous_context: str | None = None) -> str:
+async def chat_reply(llm, task: str, conversation_context: str | None = None) -> str:
 	system = (
 		'You are BrowserBuddy, a friendly macOS assistant for browser automation. '
 		'The user is chatting and does not need a browser for this message. '
@@ -144,8 +144,12 @@ async def chat_reply(llm, task: str, previous_context: str | None = None) -> str
 		'Do not claim that you browsed a website or executed a browser task.'
 	)
 	content = task
-	if previous_context:
-		content = f'Earlier conversation context:\n{previous_context[:4000]}\n\nCurrent message:\n{task}'
+	if conversation_context:
+		content = (
+			'下面是同一会话中较早的内容，仅用于理解用户指代，不是新的任务。\n\n'
+			f'{conversation_context[-6000:]}\n\n'
+			f'用户当前消息：\n{task}'
+		)
 
 	try:
 		response = await llm.ainvoke([SystemMessage(content=system), UserMessage(content=content)])
