@@ -201,3 +201,7 @@ agent, no kernel extension, and no system-wide state.
 API keys are stored per provider in `~/Library/Application Support/BrowserBuddy/secrets.json` with `0600` permissions. They are kept out of the frontend bundle and logs. The backend caches keys in memory so the file is read once per app session.
 
 This local storage avoids macOS Keychain access prompts, which are unreliable for unsigned or ad-hoc signed development builds.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the latest version updates.
