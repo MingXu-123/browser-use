@@ -457,7 +457,7 @@ def load_attachment_images(records: list[dict], limit: int = MAX_VISUAL_INPUTS) 
 
 
 def load_attachment_summaries(ids: list[str] | None) -> str:
-	"""Return cached summaries for referenced video attachments."""
+	"""Return cached summaries for any referenced attachments."""
 	blocks: list[str] = []
 	for raw_id in ids or []:
 		if not isinstance(raw_id, str) or not UPLOAD_ID_RE.fullmatch(raw_id):
@@ -467,7 +467,7 @@ def load_attachment_summaries(ids: list[str] | None) -> str:
 			meta = json.loads((directory / 'meta.json').read_text(encoding='utf-8'))
 		except Exception:
 			continue
-		if not isinstance(meta, dict) or not meta.get('is_video'):
+		if not isinstance(meta, dict):
 			continue
 		summary_path = directory / 'summary.txt'
 		if not summary_path.exists():
@@ -476,8 +476,15 @@ def load_attachment_summaries(ids: list[str] | None) -> str:
 			summary = summary_path.read_text(encoding='utf-8').strip()
 		except Exception:
 			continue
-		if summary:
-			blocks.append(f'【视频内容摘要：{meta.get("name", "video")}】\n{summary}')
+		if not summary:
+			continue
+		if meta.get('is_video'):
+			label = '视频内容摘要'
+		elif meta.get('is_image'):
+			label = '图片内容摘要'
+		else:
+			label = '文件内容摘要'
+		blocks.append(f'【{label}：{meta.get("name", "file")}】\n{summary}')
 	return '\n\n'.join(blocks)
 
 

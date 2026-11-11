@@ -68,7 +68,7 @@ def _normalize(messages: list[ContextTurn] | None) -> list[ContextTurn]:
 
 
 def _with_attachment_summaries(turns: list[ContextTurn]) -> list[ContextTurn]:
-	"""Replace referenced video attachments with their cached summaries."""
+	"""Replace referenced attachments with their cached summaries."""
 	enriched: list[ContextTurn] = []
 	for turn in turns:
 		if turn.role == 'user' and turn.attachments:

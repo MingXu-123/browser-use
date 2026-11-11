@@ -64,7 +64,7 @@ from .storage import (  # noqa: E402
 	save_chat,
 	save_preferences,
 )
-from .transcribe import summarize_video, transcribe_video  # noqa: E402
+from .transcribe import summarize_attachment, transcribe_video  # noqa: E402
 from .uploads import (  # noqa: E402
 	MAX_FILES,
 	MAX_TOTAL_BYTES,
@@ -878,13 +878,17 @@ async def _run_agent(request: RunRequest) -> None:
 			attachment_context += '\n\n' + '\n\n'.join(audio_sections)
 
 		for record in attachment_records:
-			if not record.get('is_video'):
-				continue
 			record_id = str(record.get('id') or '')
-			frames = [image for image in attachment_images if image.get('source_id') == record_id]
-			video_summary = await summarize_video(llm, record, frames, video_transcripts.get(record_id, ''))
-			if video_summary:
-				logger.info(f'Video summary ready for {record.get("name")}: {len(video_summary)} chars')
+			images = [image for image in attachment_images if image.get('source_id') == record_id]
+			attachment_summary = await summarize_attachment(
+				llm,
+				record,
+				images,
+				str(record.get('text') or ''),
+				video_transcripts.get(record_id, ''),
+			)
+			if attachment_summary:
+				logger.info(f'Attachment summary ready for {record.get("name")}: {len(attachment_summary)} chars')
 
 		if (
 			attachment_records

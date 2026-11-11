@@ -1,9 +1,9 @@
-"""Video audio extraction and transcription for BrowserBuddy.
+"""Video audio transcription and cached attachment summaries.
 
-The video's visual content is handled by keyframes in ``uploads.py``. This
-module adds the audio track: ffmpeg extracts a mono 16 kHz MP3, then OpenAI
-Whisper or Google Gemini turns it into text. Results are cached next to the
-uploaded video so a follow-up task does not pay for transcription again.
+Videos are represented by keyframes (in ``uploads.py``) plus an audio track
+transcribed here. This module also creates concise summaries for images,
+documents, and videos; later turns reuse those summaries instead of resending
+the full content.
 """
 
 from __future__ import annotations
@@ -148,16 +148,21 @@ async def transcribe_video(record: dict[str, Any], config: dict[str, Any] | None
 	return text, None
 
 
-async def summarize_video(
+SHORT_TEXT_SUMMARY_CHARS = 1200
+
+
+async def summarize_attachment(
 	llm,
 	record: dict[str, Any],
-	frames: list[dict[str, Any]],
-	transcript: str,
+	images: list[dict[str, Any]],
+	text: str = '',
+	transcript: str = '',
 ) -> str:
-	"""Create a reusable summary of a video, cached next to it.
+	"""Create a reusable summary for an image, document, or video.
 
-	The current turn already sends keyframes and the full transcript. Later
+	The current turn still sends the full extracted text / image content. Later
 	turns only carry this summary, which keeps the conversation context small.
+	Short text files are cached verbatim without an LLM call.
 	"""
 	path = Path(str(record.get('path') or ''))
 	if not path.exists():
@@ -171,23 +176,51 @@ async def summarize_video(
 		except Exception:
 			pass
 
+	is_video = bool(record.get('is_video'))
+	is_image = bool(record.get('is_image'))
+	text = (text or '').strip()
 	transcript = (transcript or '').strip()
-	if not frames and not transcript:
+
+	if not is_video and not is_image and text and len(text) <= SHORT_TEXT_SUMMARY_CHARS:
+		summary = text[:1600]
+		try:
+			cache_path.write_text(summary, encoding='utf-8')
+		except Exception as e:
+			logger.warning(f'Could not cache attachment summary for {path}: {type(e).__name__}: {e}')
+		return summary
+
+	if not images and not text and not transcript:
 		return ''
 
-	instructions = (
-		f'请为视频 {record.get("name", "video")} 生成一份供后续对话复用的内容摘要。\n'
-		'保留主题、人物或主体、关键事件与时间线、重要数字和结论；不要编造。\n'
-		'控制在 300-500 字，只输出摘要正文。\n\n'
-		f'音频转录（可能为空）：\n{transcript[:12000] or "（无可用语音转录）"}'
-	)
+	name = str(record.get('name') or path.name)
+	if is_video:
+		instructions = (
+			f'请为视频 {name} 生成一份供后续对话复用的内容摘要。\n'
+			'保留主题、人物或主体、关键事件与时间线、重要数字和结论；不要编造。\n'
+			'控制在 300-500 字，只输出摘要正文。\n\n'
+			f'音频转录（可能为空）：\n{transcript[:12000] or "（无可用语音转录）"}'
+		)
+	elif is_image:
+		instructions = (
+			f'请详细描述图片 {name}，用于后续对话复用。\n'
+			'尽量保留其中的文字、数字、表格、界面元素、人物/场景和关键细节；不要编造。\n'
+			'控制在 300-500 字，只输出描述正文。'
+		)
+	else:
+		instructions = (
+			f'请总结文件 {name} 的内容，用于后续对话复用。\n'
+			'保留关键事实、实体名称、数字、条件、要求和结论；不要编造。\n'
+			'控制在 300-500 字，只输出摘要正文。\n\n'
+			f'文件内容：\n{text[:12000] or "（没有可读取的文本）"}'
+		)
+
 	content: list[ContentPartTextParam | ContentPartImageParam] = [ContentPartTextParam(text=instructions)]
-	for frame in frames[:8]:
+	for image in images[:8]:
 		content.append(
 			ContentPartImageParam(
 				image_url=ImageURL(
-					url=f'data:{frame["media_type"]};base64,{frame["data"]}',
-					media_type=frame['media_type'],
+					url=f'data:{image["media_type"]};base64,{image["data"]}',
+					media_type=image['media_type'],
 					detail='auto',
 				)
 			)
@@ -197,21 +230,21 @@ async def summarize_video(
 	try:
 		response = await llm.ainvoke(
 			[
-				SystemMessage(content='你负责把视频压缩成简洁、事实性的摘要，供后续多轮对话作为上下文。'),
+				SystemMessage(content='你负责把用户上传的附件压缩成简洁、事实性的摘要，供后续多轮对话作为上下文。'),
 				UserMessage(content=content),
 			]
 		)
 		summary = str(getattr(response, 'completion', '') or '').strip()
 	except Exception as e:
-		logger.warning(f'Video summary failed for {path}: {type(e).__name__}: {e}')
+		logger.warning(f'Attachment summary failed for {path}: {type(e).__name__}: {e}')
 
 	if not summary:
-		summary = transcript[:1200]
+		summary = (transcript or text)[:1200]
 	if not summary:
 		return ''
 	summary = summary[:1600]
 	try:
 		cache_path.write_text(summary, encoding='utf-8')
 	except Exception as e:
-		logger.warning(f'Could not cache video summary for {path}: {type(e).__name__}: {e}')
+		logger.warning(f'Could not cache attachment summary for {path}: {type(e).__name__}: {e}')
 	return summary
