@@ -519,7 +519,7 @@ function Timeline({ steps, running, result, error }) {
       {steps.length === 0 && running && (
         <div className="activity-empty">
           <Icon name="loader" size={18} className="spin" />
-          正在启动浏览器...
+          正在处理任务...
         </div>
       )}
 
@@ -1332,12 +1332,12 @@ function buildContextMessages(messages) {
     .filter((message) => message.text || message.links.length || message.files.length)
 }
 
-function TraceList({ steps, running }) {
+function TraceList({ steps, running, mode }) {
   if (!steps.length) {
     return running ? (
       <div className="activity-empty">
         <Icon name="loader" size={16} className="spin" />
-        正在启动浏览器...
+        {mode === 'browser' ? '正在启动浏览器...' : '正在处理任务...'}
       </div>
     ) : null
   }
@@ -1463,7 +1463,7 @@ function AssistantMessage({ message, onCopy, onDownload, onDownloads }) {
   )
 }
 
-function LiveMessage({ steps }) {
+function LiveMessage({ steps, mode }) {
   return (
     <div className="chat-message assistant live">
       <div className="assistant-avatar">
@@ -1474,7 +1474,7 @@ function LiveMessage({ steps }) {
           <span>BrowserBuddy</span>
           <span className="live-label">正在执行</span>
         </div>
-        <TraceList steps={steps} running />
+        <TraceList steps={steps} running mode={mode} />
       </div>
     </div>
   )
@@ -1717,6 +1717,7 @@ function ChatView({
   thread,
   running,
   liveSteps,
+  liveMode,
   error,
   draft,
   setDraft,
@@ -1795,7 +1796,7 @@ function ChatView({
               />
             ),
           )}
-          {running && <LiveMessage steps={liveSteps} />}
+          {running && <LiveMessage steps={liveSteps} mode={liveMode} />}
           {error && (
             <div className="chat-error">
               <Icon name="alert" size={16} />
@@ -1864,6 +1865,7 @@ export default function App() {
   const [attachmentError, setAttachmentError] = useState('')
   const [running, setRunning] = useState(false)
   const [liveSteps, setLiveSteps] = useState([])
+  const [liveMode, setLiveMode] = useState(null)
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [theme, setTheme] = useState('light')
@@ -2063,6 +2065,7 @@ export default function App() {
     })
 
     setRunning(false)
+    setLiveMode(null)
     setLiveSteps([])
     liveStepsRef.current = []
     pendingThreadRef.current = null
@@ -2120,7 +2123,16 @@ export default function App() {
         }
         return
       }
+      if (event.type === 'run_started') {
+        setLiveMode(null)
+        return
+      }
+      if (event.type === 'mode') {
+        setLiveMode(event.mode || null)
+        return
+      }
       if (event.type === 'step') {
+        setLiveMode('browser')
         const next = liveStepsRef.current.some((item) => item.step === event.step)
           ? liveStepsRef.current.map((item) => (item.step === event.step ? event : item))
           : [...liveStepsRef.current, event]
@@ -2159,6 +2171,7 @@ export default function App() {
       }
       if (event.type === 'run_finished') {
         setRunning(false)
+        setLiveMode(null)
       }
     },
     [appendAssistant, showToast],
@@ -2238,6 +2251,7 @@ export default function App() {
           pendingThreadRef.current = thread.id
           runMetaRef.current = { task: state.task, provider: state.provider, model: state.model }
           setRunning(true)
+          setLiveMode(state.mode || null)
           setLiveSteps(state.steps || [])
           liveStepsRef.current = state.steps || []
         }
@@ -2287,6 +2301,7 @@ export default function App() {
     setAttachments([])
     setAttachmentError('')
     setUploading(false)
+    setLiveMode(null)
     setLiveSteps([])
     liveStepsRef.current = []
     setError('')
@@ -2301,6 +2316,7 @@ export default function App() {
     setAttachments([])
     setAttachmentError('')
     setUploading(false)
+    setLiveMode(null)
     setLiveSteps([])
     liveStepsRef.current = []
     setError('')
@@ -2380,6 +2396,7 @@ export default function App() {
     setAttachments([])
     setAttachmentError('')
     setUploading(false)
+    setLiveMode(null)
     setLiveSteps([])
     liveStepsRef.current = []
     pendingThreadRef.current = threadId
@@ -2543,6 +2560,7 @@ export default function App() {
             thread={activeThread}
             running={running}
             liveSteps={liveSteps}
+            liveMode={liveMode}
             error={error}
             draft={draft}
             setDraft={setDraft}

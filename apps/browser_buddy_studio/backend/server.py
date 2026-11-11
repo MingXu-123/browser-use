@@ -163,6 +163,7 @@ STATE: dict[str, Any] = {
 	'task': '',
 	'provider': '',
 	'model': '',
+	'mode': None,
 	'steps': [],
 	'result': None,
 	'error': None,
@@ -774,6 +775,7 @@ async def _run_agent(request: RunRequest) -> None:
 			'task': request.task,
 			'provider': request.provider,
 			'model': request.model,
+			'mode': None,
 			'steps': [],
 			'result': None,
 			'error': None,
@@ -833,7 +835,12 @@ async def _run_agent(request: RunRequest) -> None:
 			names = '、'.join(str(item.get('name') or 'file') for item in attachment_records)
 			intent_task = f'{request.task}\n\n（本条消息附带文件：{names}）'
 
-		if not await needs_browser(intent_task, llm, recent_context=recent or request.previous_context):
+		use_browser = await needs_browser(intent_task, llm, recent_context=recent or request.previous_context)
+		mode = 'browser' if use_browser else 'chat'
+		STATE['mode'] = mode
+		HUB.publish({'type': 'mode', 'mode': mode})
+
+		if not use_browser:
 			reply = await chat_reply(
 				llm,
 				request.task,
@@ -975,6 +982,7 @@ async def _run_agent(request: RunRequest) -> None:
 			'success': success,
 			'duration': round(time.time() - started_at, 1),
 			'steps': len(STATE['steps']),
+			'mode': 'browser',
 		}
 		STATE['result'] = result
 		STATE['finished_at'] = time.time()
