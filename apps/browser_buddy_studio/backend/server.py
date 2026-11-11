@@ -65,8 +65,8 @@ from .storage import (  # noqa: E402
 	save_preferences,
 )
 from .uploads import (  # noqa: E402
-	MAX_FILE_BYTES,
 	MAX_FILES,
+	MAX_TOTAL_BYTES,
 	UPLOAD_ID_RE,
 	cleanup_unreferenced_uploads,
 	collect_upload_ids,
@@ -74,7 +74,7 @@ from .uploads import (  # noqa: E402
 	format_attachments_for_prompt,
 	load_attachment_images,
 	load_attachments,
-	save_upload,
+	save_upload_stream,
 )
 
 # None means "let browser-use find Google Chrome / Chromium on this Mac".
@@ -1325,33 +1325,36 @@ async def chats() -> list[dict]:
 
 @app.post('/api/uploads')
 async def upload_files(files: Annotated[list[UploadFile], File()]) -> list[dict]:
-	"""Accept up to five files, extract their text, and return metadata."""
+	"""Accept up to ten files, stream them to disk, and extract text."""
 	if not files:
 		raise HTTPException(status_code=400, detail='没有收到文件')
 	if len(files) > MAX_FILES:
 		raise HTTPException(status_code=400, detail=f'一次最多上传 {MAX_FILES} 个文件')
 
 	results: list[dict] = []
-	for upload in files:
-		data = bytearray()
-		while True:
-			chunk = await upload.read(1024 * 1024)
-			if not chunk:
-				break
-			data.extend(chunk)
-			if len(data) > MAX_FILE_BYTES:
+	uploaded_ids: set[str] = set()
+	total_bytes = 0
+	try:
+		for upload in files:
+			upload.file.seek(0)
+			try:
+				result = await asyncio.to_thread(save_upload_stream, upload.file, upload.filename)
+			except ValueError as e:
+				raise HTTPException(status_code=400, detail=str(e)) from e
+			except Exception as e:
+				logger.warning(f'Could not save upload {upload.filename}: {type(e).__name__}: {e}')
+				raise HTTPException(status_code=500, detail=f'保存文件失败: {type(e).__name__}: {e}') from e
+			uploaded_ids.add(result.id)
+			total_bytes += result.size
+			if total_bytes > MAX_TOTAL_BYTES:
 				raise HTTPException(
 					status_code=400,
-					detail=f'{upload.filename or "文件"} 超过 {MAX_FILE_BYTES // (1024 * 1024)}MB 限制',
+					detail=f'单次上传总大小不能超过 {MAX_TOTAL_BYTES // (1024 * 1024)}MB',
 				)
-		if not data:
-			continue
-		try:
-			result = await asyncio.to_thread(save_upload, bytes(data), upload.filename)
-		except Exception as e:
-			logger.warning(f'Could not save upload {upload.filename}: {type(e).__name__}: {e}')
-			raise HTTPException(status_code=500, detail=f'保存文件失败: {type(e).__name__}: {e}') from e
-		results.append(result.model_dump())
+			results.append(result.model_dump())
+	except Exception:
+		delete_upload_dirs(uploaded_ids)
+		raise
 
 	if not results:
 		raise HTTPException(status_code=400, detail='没有收到有效文件')

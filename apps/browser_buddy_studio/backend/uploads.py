@@ -29,11 +29,23 @@ from .config import UPLOADS_DIR
 
 logger = logging.getLogger('browser_buddy.uploads')
 
-MAX_FILES = 5
-MAX_FILE_BYTES = 10 * 1024 * 1024
+MAX_FILES = 10
+MAX_TOTAL_BYTES = 300 * 1024 * 1024
+MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_CHARS_PER_FILE = 15_000
 MAX_TOTAL_PROMPT_CHARS = 40_000
+MAX_PDF_PAGES = 300
 UPLOAD_ID_RE = re.compile(r'^[0-9a-f]{32}$')
+
+IMAGE_MAX_BYTES = 20 * 1024 * 1024
+DOCUMENT_MAX_BYTES = 100 * 1024 * 1024
+SPREADSHEET_MAX_BYTES = 50 * 1024 * 1024
+TEXT_MAX_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_BYTES = 20 * 1024 * 1024
+
+IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.heic'}
+DOCUMENT_SUFFIXES = {'.pdf', '.doc', '.docx', '.ppt', '.pptx'}
+SPREADSHEET_SUFFIXES = {'.xls', '.xlsx', '.csv'}
 
 TEXT_SUFFIXES = {
 	'.txt',
@@ -70,7 +82,6 @@ TEXT_SUFFIXES = {
 	'.rs',
 }
 HTML_SUFFIXES = {'.html', '.htm'}
-IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.heic'}
 
 
 class UploadedFile(BaseModel):
@@ -98,6 +109,25 @@ def _safe_name(filename: str | None) -> str:
 	return f'{stem}{suffix}' if stem else f'file{suffix}'
 
 
+def max_bytes_for(filename: str | None) -> int:
+	suffix = Path(filename or '').suffix.lower()
+	if suffix in IMAGE_SUFFIXES:
+		return IMAGE_MAX_BYTES
+	if suffix in SPREADSHEET_SUFFIXES:
+		return SPREADSHEET_MAX_BYTES
+	if suffix in DOCUMENT_SUFFIXES or suffix in TEXT_SUFFIXES or suffix in HTML_SUFFIXES:
+		return DOCUMENT_MAX_BYTES if suffix in DOCUMENT_SUFFIXES else TEXT_MAX_BYTES
+	return DEFAULT_MAX_BYTES
+
+
+def format_bytes(size: int) -> str:
+	if size >= 1024 * 1024:
+		return f'{size // (1024 * 1024)}MB'
+	if size >= 1024:
+		return f'{size // 1024}KB'
+	return f'{size}B'
+
+
 def _read_text(path: Path) -> str:
 	data = path.read_bytes()
 	for encoding in ('utf-8-sig', 'utf-8', 'gb18030', 'big5'):
@@ -122,7 +152,10 @@ def _extract_pdf(path: Path) -> tuple[str, bool]:
 	parts: list[str] = []
 	total = 0
 	truncated = False
-	for page in reader.pages:
+	for index, page in enumerate(reader.pages):
+		if index >= MAX_PDF_PAGES:
+			truncated = True
+			break
 		try:
 			text = page.extract_text() or ''
 		except Exception:
@@ -181,22 +214,23 @@ def _extract(path: Path) -> tuple[str, str, bool, str | None, str | None]:
 	return text[:MAX_CHARS_PER_FILE], kind, truncated, error, note
 
 
-def save_upload(data: bytes, filename: str | None) -> UploadedFile:
+def _upload_target(filename: str | None) -> tuple[str, str, Path, Path]:
 	upload_id = uuid.uuid4().hex
 	name = _safe_name(filename)
 	directory = UPLOADS_DIR / upload_id
 	directory.mkdir(parents=True, exist_ok=True)
-	path = directory / name
-	path.write_bytes(data)
+	return upload_id, name, directory, directory / name
 
+
+def _finalize_upload(upload_id: str, name: str, path: Path, size: int) -> UploadedFile:
 	text, kind, truncated, error, note = _extract(path)
 	if text:
-		(directory / 'extracted.txt').write_text(text, encoding='utf-8')
+		(path.parent / 'extracted.txt').write_text(text, encoding='utf-8')
 
 	record = UploadedFile(
 		id=upload_id,
 		name=name,
-		size=len(data),
+		size=size,
 		chars=len(text),
 		truncated=truncated,
 		kind=kind,
@@ -205,8 +239,37 @@ def save_upload(data: bytes, filename: str | None) -> UploadedFile:
 		note=note,
 		url=f'/uploads/{upload_id}/{quote(name)}',
 	)
-	(directory / 'meta.json').write_text(record.model_dump_json(indent=2), encoding='utf-8')
+	(path.parent / 'meta.json').write_text(record.model_dump_json(indent=2), encoding='utf-8')
 	return record
+
+
+def save_upload(data: bytes, filename: str | None) -> UploadedFile:
+	upload_id, name, _directory, path = _upload_target(filename)
+	path.write_bytes(data)
+	return _finalize_upload(upload_id, name, path, len(data))
+
+
+def save_upload_stream(source, filename: str | None) -> UploadedFile:
+	"""Copy an UploadFile stream to disk without loading the whole file in RAM."""
+	upload_id, name, directory, path = _upload_target(filename)
+	limit = max_bytes_for(name)
+	total = 0
+	try:
+		with path.open('wb') as target:
+			while True:
+				chunk = source.read(1024 * 1024)
+				if not chunk:
+					break
+				total += len(chunk)
+				if total > limit:
+					raise ValueError(f'{name} 超过 {format_bytes(limit)} 限制')
+				target.write(chunk)
+		if total == 0:
+			raise ValueError(f'{name} 是空文件')
+		return _finalize_upload(upload_id, name, path, total)
+	except Exception:
+		shutil.rmtree(directory, ignore_errors=True)
+		raise
 
 
 def load_attachments(ids: list[str] | None) -> list[dict]:

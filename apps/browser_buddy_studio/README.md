@@ -101,7 +101,7 @@ needs right-click → Open → Open.
 - Markdown result rendering
 - Link preview cards with `og:image`
 - Attachment and PDF/image previews
-- File attachments for tasks: TXT, Markdown, CSV, JSON, HTML, PDF, and DOCX text is extracted and sent with the task; images are passed to vision-capable models when **视觉模式** is enabled; the original file is also available to the agent for read/upload actions (max 5 files, 10 MB each). Images are stored and available for upload/view, but are not OCR'd.
+- File attachments for tasks: TXT, Markdown, CSV, JSON, HTML, PDF, and DOCX text is extracted and sent with the task; images are passed to vision-capable models when **视觉模式** is enabled; the original file is also available to the agent for read/upload actions. Limits: max 10 files per message, images 20 MB, PDF/Word/PPT 100 MB, Excel/CSV 50 MB, plain text 20 MB, total 300 MB. Excel/PPT uploads are accepted but their text is not extracted yet.
 - Multi-provider model settings:
   - DeepSeek
   - Browser Use

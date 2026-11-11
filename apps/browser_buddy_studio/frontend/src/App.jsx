@@ -49,7 +49,20 @@ const DEFAULT_SETTINGS = {
 
 // A single message is capped so one pasted document cannot blow up the prompt.
 const INPUT_MAX_CHARS = 8000
-const MAX_ATTACHMENTS = 5
+const MAX_ATTACHMENTS = 10
+const MAX_TOTAL_ATTACHMENT_MB = 300
+const IMAGE_FILE_LIMIT_MB = 20
+const DEFAULT_FILE_LIMIT_MB = 20
+const FILE_LIMIT_MB = {
+  pdf: 100,
+  doc: 100,
+  docx: 100,
+  ppt: 100,
+  pptx: 100,
+  xls: 50,
+  xlsx: 50,
+  csv: 50,
+}
 // The warning is driven by the model's context window, not by turn count. A
 // few dozen short turns are harmless; a few long code-heavy turns are not.
 const CONTEXT_INFO_RATIO = 0.6
@@ -150,6 +163,16 @@ const IMAGE_ATTACHMENT_KINDS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bm
 
 function isImageAttachment(attachment) {
   return Boolean(attachment?.is_image) || IMAGE_ATTACHMENT_KINDS.has(String(attachment?.kind || '').toLowerCase())
+}
+
+function fileLimitMb(file) {
+  const extension = (file.name.split('.').pop() || '').toLowerCase()
+  if (IMAGE_ATTACHMENT_KINDS.has(extension)) return IMAGE_FILE_LIMIT_MB
+  return FILE_LIMIT_MB[extension] || DEFAULT_FILE_LIMIT_MB
+}
+
+function fileLimitLabel() {
+  return '图片 20MB，PDF/Word/PPT 100MB，Excel/CSV 50MB，文本 20MB'
 }
 
 function attachmentMeta(attachment, visionEnabled = true) {
@@ -1550,7 +1573,7 @@ function ChatComposer({
             className="soft-chip attach-chip"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
-            title={attachments.length >= MAX_ATTACHMENTS ? `最多 ${MAX_ATTACHMENTS} 个文件` : '添加文件'}
+            title={`最多 ${MAX_ATTACHMENTS} 个文件；${fileLimitLabel()}`}
           >
             <Icon name="paperclip" size={14} />
             {uploading ? '上传中…' : '文件'}
@@ -1870,14 +1893,40 @@ export default function App() {
     async (fileList) => {
       const files = Array.from(fileList || [])
       if (!files.length) return
+
+      const warnings = []
+      const accepted = []
+      for (const file of files) {
+        const limit = fileLimitMb(file)
+        if (file.size > limit * 1024 * 1024) {
+          warnings.push(`${file.name} 超过 ${limit}MB`)
+        } else {
+          accepted.push(file)
+        }
+      }
+      if (!accepted.length) {
+        setAttachmentError(warnings.join('；') || '没有可上传的文件')
+        return
+      }
+
+      const existingBytes = attachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
+      const newBytes = accepted.reduce((sum, file) => sum + file.size, 0)
+      if (existingBytes + newBytes > MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024) {
+        setAttachmentError(`单次上传总大小不能超过 ${MAX_TOTAL_ATTACHMENT_MB}MB`)
+        return
+      }
+
       const room = MAX_ATTACHMENTS - attachments.length
       if (room <= 0) {
         setAttachmentError(`最多添加 ${MAX_ATTACHMENTS} 个文件`)
         return
       }
-      const selected = files.slice(0, room)
+      const selected = accepted.slice(0, room)
+      if (accepted.length > room) {
+        warnings.push(`最多 ${MAX_ATTACHMENTS} 个文件，已忽略多余文件`)
+      }
       const epoch = uploadEpochRef.current
-      setAttachmentError(files.length > room ? `最多 ${MAX_ATTACHMENTS} 个文件，已忽略多余文件` : '')
+      setAttachmentError(warnings.join('；'))
       setUploading(true)
       try {
         const uploaded = await uploadFiles(selected)
@@ -1885,19 +1934,20 @@ export default function App() {
         setAttachments((prev) => [...prev, ...uploaded])
         const failed = uploaded.filter((file) => file.error)
         if (failed.length) {
-          setAttachmentError(failed.map((file) => `${file.name}: ${file.error}`).join('；'))
+          warnings.push(...failed.map((file) => `${file.name}: ${file.error}`))
         }
         const images = uploaded.filter((file) => isImageAttachment(file))
         if (images.length && !settings.useVision) {
-          setAttachmentError('图片需要开启「使用网页截图/视觉模式」才能被模型理解')
+          warnings.push('图片需要开启「使用网页截图/视觉模式」才能被模型理解')
         }
+        setAttachmentError(warnings.join('；'))
       } catch (e) {
-        if (uploadEpochRef.current === epoch) setAttachmentError(e.message)
+        if (uploadEpochRef.current === epoch) setAttachmentError([...warnings, e.message].filter(Boolean).join('；'))
       } finally {
         if (uploadEpochRef.current === epoch) setUploading(false)
       }
     },
-    [attachments.length, settings.useVision],
+    [attachments, settings.useVision],
   )
 
   const handleRemoveAttachment = useCallback((uploadId) => {
