@@ -530,7 +530,7 @@ function Timeline({ steps, running, result, error }) {
       {steps.length === 0 && running && (
         <div className="activity-empty">
           <Icon name="loader" size={18} className="spin" />
-          正在处理任务...
+          正在分析任务...
         </div>
       )}
 
@@ -1361,7 +1361,7 @@ function TraceList({ steps, running, mode }) {
     return running ? (
       <div className="activity-empty">
         <Icon name="loader" size={16} className="spin" />
-        {mode === 'browser' ? '正在启动浏览器...' : '正在处理任务...'}
+        {mode === 'browser' ? '正在启动浏览器...' : mode === 'chat' ? '正在处理任务...' : '正在分析任务...'}
       </div>
     ) : null
   }
