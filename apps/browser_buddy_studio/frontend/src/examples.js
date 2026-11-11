@@ -97,3 +97,78 @@ export const EXAMPLES = [
     task: '打开抖音搜索 "露营装备"，提取前 5 个视频的标题和链接。如果需要登录、扫码或验证码，请调用 request_human_help 提示我。',
   },
 ]
+
+export const EXAMPLES_EN = {
+  search: {
+    tag: 'Search',
+    title: 'Search & summarize',
+    subtitle: 'Search the web and organize the results',
+    task: 'Use the search tool to look up "what is browser automation", summarize the top 3 organic results, and include their titles and full links.',
+  },
+  scrape: {
+    tag: 'Data',
+    title: 'Scrape book data',
+    subtitle: 'Extract data and save a CSV',
+    task: 'Open https://books.toscrape.com, go to the Mystery category, extract the title, price, and rating of the first 5 books, and save them to mystery_books.csv.',
+  },
+  compare: {
+    tag: 'Compare',
+    title: 'Compare prices',
+    subtitle: 'Find the cheapest option',
+    task: 'Open https://books.toscrape.com, sort the Mystery category by price from low to high, and report the 3 cheapest books with prices and full links.',
+  },
+  login: {
+    tag: 'Form',
+    title: 'Login test',
+    subtitle: 'Fill a form and verify the result',
+    task: 'Open https://the-internet.herokuapp.com/login, log in with username tomsmith and password SuperSecretPassword!, and report whether the login succeeded.',
+  },
+  tabs: {
+    tag: 'Tabs',
+    title: 'Summarize multiple tabs',
+    subtitle: 'Read the top results separately',
+    task: "Search for 'best things to do in Tokyo', open the top 3 organic results in new tabs, and summarize what each page recommends.",
+  },
+  validate: {
+    tag: 'Verify',
+    title: 'Verify page controls',
+    subtitle: 'Check buttons, checkboxes, and inputs',
+    task: 'Open https://the-internet.herokuapp.com/dynamic_controls, remove the checkbox, confirm it disappears, add it back, enable the input, type "hello", and report the final state.',
+  },
+  download: {
+    tag: 'Download',
+    title: 'Download a public file',
+    subtitle: 'Download and report the file path',
+    task: 'Open https://the-internet.herokuapp.com/download, download the first available text file, and report the filename and path.',
+  },
+  research: {
+    tag: 'Research',
+    title: 'Multi-source research',
+    subtitle: 'Cross-check and summarize viewpoints',
+    task: 'Research the latest news about browser automation agents, visit at least 3 sources, compare their main points, and give a concise summary with links.',
+  },
+  taobao: {
+    tag: 'Shopping',
+    title: 'Taobao price check',
+    subtitle: 'Search products and extract prices',
+    task: 'Open Taobao, search for "mechanical keyboard", sort by sales, and extract the title, price, and link of the top 5 products. If login, QR scan, or CAPTCHA is required, call request_human_help to prompt me.',
+  },
+  jd: {
+    tag: 'Shopping',
+    title: 'JD price check',
+    subtitle: 'Search products and extract prices',
+    task: 'Open JD, search for "mechanical keyboard", sort by sales, and extract the title, price, and link of the top 5 products. If login, QR scan, or CAPTCHA is required, call request_human_help to prompt me.',
+  },
+  xiaohongshu: {
+    tag: 'Xiaohongshu',
+    title: 'Xiaohongshu search',
+    subtitle: 'Search notes and extract results',
+    task: 'Open Xiaohongshu, search for "camping gear", and extract the titles and links of the top 5 notes. If login, QR scan, or CAPTCHA is required, call request_human_help to prompt me.',
+  },
+  douyin: {
+    tag: 'Douyin',
+    title: 'Douyin search',
+    subtitle: 'Search videos and extract results',
+    task: 'Open Douyin, search for "camping gear", and extract the titles and links of the top 5 videos. If login, QR scan, or CAPTCHA is required, call request_human_help to prompt me.',
+  },
+}

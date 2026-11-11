@@ -29,7 +29,8 @@ import {
   stopTask,
   uploadFiles,
 } from './api'
-import { EXAMPLES } from './examples'
+import { EXAMPLES, EXAMPLES_EN } from './examples'
+import { DEFAULT_LANGUAGE, I18nContext, LANGUAGES, localizeBackendError, translate, useI18n } from './i18n'
 import { Icon } from './icons'
 
 // Bump this when the palette changes so existing installs pick up the new
@@ -44,6 +45,7 @@ const DEFAULT_SETTINGS = {
   transcribeAudio: true,
   maxSteps: 50,
   searchEngine: 'auto',
+  language: DEFAULT_LANGUAGE,
   // 0 means "use the provider default advertised by /api/providers".
   contextWindow: 0,
 }
@@ -73,18 +75,20 @@ const CONTEXT_CRITICAL_RATIO = 0.95
 const FALLBACK_CONTEXT_WINDOW = 128000
 
 const SEARCH_ENGINES = [
-  { value: 'auto', label: '自动（优先 Bing）' },
-  { value: 'bing_cn', label: 'Bing 中国' },
-  { value: 'baidu', label: '百度' },
-  { value: 'sogou', label: '搜狗' },
-  { value: 'so', label: '360 搜索' },
-  { value: 'bing', label: 'Bing 国际' },
-  { value: 'google', label: 'Google' },
-  { value: 'duckduckgo', label: 'DuckDuckGo' },
+  { value: 'auto', label: '自动（优先 Bing）', labelEn: 'Auto (Bing first)' },
+  { value: 'bing_cn', label: 'Bing 中国', labelEn: 'Bing China' },
+  { value: 'baidu', label: '百度', labelEn: 'Baidu' },
+  { value: 'sogou', label: '搜狗', labelEn: 'Sogou' },
+  { value: 'so', label: '360 搜索', labelEn: '360 Search' },
+  { value: 'bing', label: 'Bing 国际', labelEn: 'Bing' },
+  { value: 'google', label: 'Google', labelEn: 'Google' },
+  { value: 'duckduckgo', label: 'DuckDuckGo', labelEn: 'DuckDuckGo' },
 ]
 
-function searchEngineLabel(value) {
-  return SEARCH_ENGINES.find((engine) => engine.value === value)?.label || '自动'
+function searchEngineLabel(value, language = 'zh') {
+  const engine = SEARCH_ENGINES.find((item) => item.value === value)
+  if (!engine) return language === 'en' ? 'Auto' : '自动'
+  return language === 'en' ? engine.labelEn : engine.label
 }
 
 function platformLabel(site) {
@@ -183,16 +187,23 @@ function fileLimitLabel() {
   return '图片 20MB，视频 200MB，PDF/Word/PPT 100MB，Excel/CSV 50MB，文本 20MB'
 }
 
-function attachmentMeta(attachment, visionEnabled = true) {
+function attachmentMeta(attachment, visionEnabled = true, t = (text) => text) {
   if (isImageAttachment(attachment)) {
-    return visionEnabled ? `图片 · 视觉模式 · ${formatFileSize(attachment.size)}` : `图片 · 需开启视觉 · ${formatFileSize(attachment.size)}`
+    return visionEnabled
+      ? t('图片 · 视觉模式 · {size}', { size: formatFileSize(attachment.size) })
+      : t('图片 · 需开启视觉 · {size}', { size: formatFileSize(attachment.size) })
   }
   if (isVideoAttachment(attachment)) {
-    return visionEnabled ? `视频 · 自适应关键帧 · ${formatFileSize(attachment.size)}` : `视频 · 需开启视觉 · ${formatFileSize(attachment.size)}`
+    return visionEnabled
+      ? t('视频 · 自适应关键帧 · {size}', { size: formatFileSize(attachment.size) })
+      : t('视频 · 需开启视觉 · {size}', { size: formatFileSize(attachment.size) })
   }
   if (attachment.error) return attachment.error
   if (attachment.chars) {
-    return `${attachment.chars.toLocaleString()} 字${attachment.truncated ? '（已截断）' : ''}`
+    return t('{chars} 字{truncated}', {
+      chars: attachment.chars.toLocaleString(),
+      truncated: attachment.truncated ? t('（已截断）') : '',
+    })
   }
   if (attachment.note) return attachment.note
   return formatFileSize(attachment.size)
@@ -246,11 +257,12 @@ function groupHistory(history) {
 }
 
 function StatusPill({ running, result, error }) {
+  const { t } = useI18n()
   if (running) {
     return (
       <span className="status-pill running">
         <span className="status-dot" />
-        执行中
+        {t('执行中')}
       </span>
     )
   }
@@ -258,7 +270,7 @@ function StatusPill({ running, result, error }) {
     return (
       <span className="status-pill error">
         <Icon name="alert" size={14} />
-        失败
+        {t('失败')}
       </span>
     )
   }
@@ -266,7 +278,7 @@ function StatusPill({ running, result, error }) {
     return (
       <span className="status-pill success">
         <Icon name="check" size={14} />
-        已完成
+        {t('已完成')}
       </span>
     )
   }
@@ -274,6 +286,7 @@ function StatusPill({ running, result, error }) {
 }
 
 function Sidebar({ history, activeId, onNew, onSelect, onDelete, busy, onSettings, onDownloads, onLogin, loginActive, loginSite, platforms, theme, setTheme, providers, settings }) {
+  const { t } = useI18n()
   const groups = groupHistory(history)
   const providerInfo = providers.find((item) => item.name === settings.provider)
   const apiReady = Boolean(providerInfo?.has_key)
@@ -299,36 +312,38 @@ function Sidebar({ history, activeId, onNew, onSelect, onDelete, busy, onSetting
 
       <button className="new-task" onClick={onNew}>
         <Icon name="plus" size={17} />
-        新建对话
+        {t('新建对话')}
         <span className="kbd">⌘N</span>
       </button>
       <button className="sidebar-action" onClick={onDownloads}>
         <Icon name="folder" size={16} />
-        下载文件夹
-        <span className="sidebar-action-hint">应用内</span>
+        {t('下载文件夹')}
+        <span className="sidebar-action-hint">{t('应用内')}</span>
       </button>
       <button className={`sidebar-action ${loginActive ? 'accent' : ''}`} onClick={onLogin}>
         <Icon name="login" size={16} />
-        {loginActive ? `登录中：${platformLabel(loginSite)}` : '登录平台'}
-        {loggedInCount > 0 && <span className="login-count">{loggedInCount} 已登录</span>}
+        {loginActive ? t('登录中：{label}', { label: t(platformLabel(loginSite)) }) : t('登录平台')}
+        {loggedInCount > 0 && (
+          <span className="login-count">{t('{count} 已登录', { count: loggedInCount })}</span>
+        )}
       </button>
 
       <div className="sidebar-section">
-        <div className="section-label">对话</div>
+        <div className="section-label">{t('对话')}</div>
         {groups.length === 0 ? (
-          <div className="empty-history">还没有对话</div>
+          <div className="empty-history">{t('还没有对话')}</div>
         ) : (
           groups.map(([label, items]) => (
             <div key={label} className="history-group">
-              <div className="history-label">{label}</div>
+              <div className="history-label">{t(label)}</div>
               {items.map((item) => (
                 <div key={item.id} className={`history-row ${item.id === activeId ? 'active' : ''}`}>
                   {confirmId === item.id && !busy ? (
                     <div className="history-confirm">
-                      <span>删除这条对话？</span>
+                      <span>{t('删除这条对话？')}</span>
                       <div className="history-confirm-actions">
                         <button className="soft-chip" onClick={() => setConfirmId(null)}>
-                          取消
+                          {t('取消')}
                         </button>
                         <button
                           className="soft-chip danger"
@@ -337,7 +352,7 @@ function Sidebar({ history, activeId, onNew, onSelect, onDelete, busy, onSetting
                             onDelete(item.id)
                           }}
                         >
-                          删除
+                          {t('删除')}
                         </button>
                       </div>
                     </div>
@@ -366,7 +381,7 @@ function Sidebar({ history, activeId, onNew, onSelect, onDelete, busy, onSetting
                       {!busy && (
                         <button
                           className="history-delete"
-                          title="删除这条对话"
+                          title={t('删除这条对话')}
                           onClick={() => setConfirmId(item.id)}
                         >
                           <Icon name="trash" size={13} />
@@ -384,16 +399,16 @@ function Sidebar({ history, activeId, onNew, onSelect, onDelete, busy, onSetting
       <div className="sidebar-footer">
         <div className={`api-status ${apiReady ? 'ready' : ''}`}>
           <span className="api-dot" />
-          {apiReady ? 'API 已连接' : '需要 API Key'}
+          {apiReady ? t('API 已连接') : t('需要 API Key')}
         </div>
         <div className="footer-actions">
-          <button className="icon-button" onClick={onSettings} title="设置">
+          <button className="icon-button" onClick={onSettings} title={t('设置')}>
             <Icon name="settings" size={18} />
           </button>
           <button
             className="icon-button"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title="切换主题"
+            title={t('切换主题')}
           >
             <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={18} />
           </button>
@@ -517,6 +532,7 @@ function Home({ task, setTask, onRun, running, settings, onSettings, error, foll
 }
 
 function Timeline({ steps, running, result, error }) {
+  const { t } = useI18n()
   return (
     <section className="activity-panel">
       <div className="panel-head">
@@ -557,7 +573,7 @@ function Timeline({ steps, running, result, error }) {
                     ))}
                   </span>
                 </div>
-                <div className="timeline-goal">{step.goal || '执行中'}</div>
+                <div className="timeline-goal">{step.goal || t('执行中')}</div>
               </div>
             </div>
           )
@@ -578,6 +594,7 @@ function Timeline({ steps, running, result, error }) {
 }
 
 function Markdown({ text }) {
+  const { t, lang } = useI18n()
   const [openError, setOpenError] = useState('')
   const html = useMemo(() => {
     const rendered = marked.parse(text || '')
@@ -599,13 +616,13 @@ function Markdown({ text }) {
     event.preventDefault()
     setOpenError('')
     if (lacksXiaohongshuToken(url.href)) {
-      setOpenError('该小红书链接缺少访问令牌 xsec_token，桌面端会显示 404。请重新运行任务，让来源返回带 xsec_token 的完整链接。')
+      setOpenError(t('该小红书链接缺少访问令牌 xsec_token，桌面端会显示 404。请重新运行任务，让来源返回带 xsec_token 的完整链接。'))
       return
     }
     try {
       await openUrl(url.href, 'markdown')
     } catch (error) {
-      setOpenError(error.message || '打开链接失败')
+      setOpenError(localizeBackendError(error.message || t('打开链接失败'), lang))
     }
   }
 
@@ -641,6 +658,7 @@ function lacksXiaohongshuToken(url) {
 }
 
 function SourceCard({ source }) {
+  const { t, lang } = useI18n()
   const initial = (source.domain || '?').slice(0, 1).toUpperCase()
   const usesLoggedInBrowser = isLoggedInSource(source.url)
   const missingToken = usesLoggedInBrowser && lacksXiaohongshuToken(source.url)
@@ -652,14 +670,14 @@ function SourceCard({ source }) {
     if (opening) return
     setOpenError('')
     if (missingToken) {
-      setOpenError('该链接缺少 xsec_token，桌面端会显示 404。请重新运行任务，让来源返回完整链接。')
+      setOpenError(t('该链接缺少 xsec_token，桌面端会显示 404。请重新运行任务，让来源返回完整链接。'))
       return
     }
     setOpening(true)
     try {
       await openUrl(source.url, 'source-card')
     } catch (error) {
-      setOpenError(error.message || '打开失败')
+      setOpenError(localizeBackendError(error.message || t('打开失败'), lang))
     } finally {
       setOpening(false)
     }
@@ -672,7 +690,7 @@ function SourceCard({ source }) {
       target="_blank"
       rel="noreferrer"
       onClick={handleClick}
-      title={usesLoggedInBrowser ? '用 BrowserBuddy 已登录的浏览器打开' : source.url}
+      title={usesLoggedInBrowser ? t('用 BrowserBuddy 已登录的浏览器打开') : source.url}
     >
       <div className="source-image">
         <span className="source-placeholder">{initial}</span>
@@ -695,11 +713,11 @@ function SourceCard({ source }) {
         {usesLoggedInBrowser && (
           <div className="source-browser-hint">
             <Icon name="globe" size={11} />
-            {opening ? '正在打开…' : '用已登录浏览器打开'}
+            {opening ? t('正在打开…') : t('用已登录浏览器打开')}
           </div>
         )}
         {missingToken && (
-          <div className="source-warning">此链接缺少访问令牌，可能无法直接播放</div>
+          <div className="source-warning">{t('此链接缺少访问令牌，可能无法直接播放')}</div>
         )}
         {openError && <div className="source-warning">{openError}</div>}
       </div>
@@ -709,10 +727,11 @@ function SourceCard({ source }) {
 }
 
 function Attachments({ files, images }) {
+  const { t } = useI18n()
   if (!files.length && !images.length) return null
   return (
     <div className="attachments-block">
-      <div className="result-section-head">附件与图片</div>
+      <div className="result-section-head">{t('附件与图片')}</div>
       {images.length > 0 && (
         <div className="image-grid">
           {images.map((image) => (
@@ -886,14 +905,15 @@ function RunView({
   )
 }
 
-function loginOptionHint(status, fallback) {
+function loginOptionHint(status, fallback, t) {
   if (!status?.logged_in) return fallback
-  return status.account ? `已登录：${status.account}` : '已登录，无需重复登录'
+  return status.account ? t('已登录：{account}', { account: status.account }) : t('已登录，无需重复登录')
 }
 
 function LoginDialog({ open, active, busy, site, error, platforms, onClose, onStart, onFinish, onCancel }) {
+  const { t } = useI18n()
   if (!open) return null
-  const label = platformLabel(site)
+  const label = t(platformLabel(site))
   const statusFor = (key) => (platforms || []).find((item) => item.site === key)
 
   return (
@@ -901,8 +921,8 @@ function LoginDialog({ open, active, busy, site, error, platforms, onClose, onSt
       <div className="modal-card login-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <div className="modal-title">登录平台</div>
-            <div className="modal-sub">登录一次后，cookies 会保存在 BrowserBuddy 的独立浏览器 profile 中</div>
+            <div className="modal-title">{t('登录平台')}</div>
+            <div className="modal-sub">{t('登录一次后，cookies 会保存在 BrowserBuddy 的独立浏览器 profile 中')}</div>
           </div>
           <button className="icon-button" onClick={onClose}>
             <Icon name="x" size={18} />
@@ -913,27 +933,27 @@ function LoginDialog({ open, active, busy, site, error, platforms, onClose, onSt
           <div className="login-active">
             <div className="login-site-badge">
               <Icon name="login" size={18} />
-              {label} 登录页已打开
+              {t('{label} 登录页已打开', { label })}
             </div>
-            <p>请在弹出的浏览器窗口中完成扫码或账号密码登录。检测到登录成功后会自动关闭登录窗口；扫码失败时直接关闭浏览器窗口即可。</p>
-            <div className="login-note">不要在这里输入密码。只在你自己的浏览器窗口中登录。登录状态会保存在本机，下次不需要重复扫码。</div>
+            <p>{t('请在弹出的浏览器窗口中完成扫码或账号密码登录。检测到登录成功后会自动关闭登录窗口；扫码失败时直接关闭浏览器窗口即可。')}</p>
+            <div className="login-note">{t('不要在这里输入密码。只在你自己的浏览器窗口中登录。登录状态会保存在本机，下次不需要重复扫码。')}</div>
             <div className="modal-actions">
               <button className="run-button" onClick={onFinish}>
                 <Icon name="check" size={15} />
-                已完成登录
+                {t('已完成登录')}
               </button>
               <button className="secondary-button" onClick={onCancel}>
-                取消登录
+                {t('取消登录')}
               </button>
             </div>
           </div>
         ) : (
           <div>
-            <p>选择一个平台。BrowserBuddy 会打开一个可见浏览器，用户自己完成登录，App 不保存账号密码。</p>
+            <p>{t('选择一个平台。BrowserBuddy 会打开一个可见浏览器，用户自己完成登录，App 不保存账号密码。')}</p>
             {busy && (
               <div className="login-opening">
                 <Icon name="loader" size={14} className="spin" />
-                正在打开浏览器…
+                {t('正在打开浏览器…')}
               </div>
             )}
             <div className="login-options">
@@ -941,40 +961,40 @@ function LoginDialog({ open, active, busy, site, error, platforms, onClose, onSt
                 <span className="login-option-icon">
                   <Icon name="tag" size={20} />
                 </span>
-                <strong>淘宝</strong>
+                <strong>{t('淘宝')}</strong>
                 <small className={statusFor('taobao')?.logged_in ? 'ready' : ''}>
-                  {loginOptionHint(statusFor('taobao'), '扫码或账号密码登录')}
+                  {loginOptionHint(statusFor('taobao'), t('扫码或账号密码登录'), t)}
                 </small>
               </button>
               <button className="login-option" disabled={busy} onClick={() => onStart('jd')}>
                 <span className="login-option-icon">
                   <Icon name="tag" size={20} />
                 </span>
-                <strong>京东</strong>
+                <strong>{t('京东')}</strong>
                 <small className={statusFor('jd')?.logged_in ? 'ready' : ''}>
-                  {loginOptionHint(statusFor('jd'), '扫码或账号密码登录')}
+                  {loginOptionHint(statusFor('jd'), t('扫码或账号密码登录'), t)}
                 </small>
               </button>
               <button className="login-option" disabled={busy} onClick={() => onStart('xiaohongshu')}>
                 <span className="login-option-icon">
                   <Icon name="search" size={20} />
                 </span>
-                <strong>小红书</strong>
+                <strong>{t('小红书')}</strong>
                 <small className={statusFor('xiaohongshu')?.logged_in ? 'ready' : ''}>
-                  {loginOptionHint(statusFor('xiaohongshu'), '扫码登录')}
+                  {loginOptionHint(statusFor('xiaohongshu'), t('扫码登录'), t)}
                 </small>
               </button>
               <button className="login-option" disabled={busy} onClick={() => onStart('douyin')}>
                 <span className="login-option-icon">
                   <Icon name="play" size={20} />
                 </span>
-                <strong>抖音</strong>
+                <strong>{t('抖音')}</strong>
                 <small className={statusFor('douyin')?.logged_in ? 'ready' : ''}>
-                  {loginOptionHint(statusFor('douyin'), '扫码登录')}
+                  {loginOptionHint(statusFor('douyin'), t('扫码登录'), t)}
                 </small>
               </button>
             </div>
-            <p className="login-persist-note">登录一次后，App 会保存登录状态，重启后不需要重复扫码。</p>
+            <p className="login-persist-note">{t('登录一次后，App 会保存登录状态，重启后不需要重复扫码。')}</p>
           </div>
         )}
 
@@ -990,50 +1010,49 @@ function LoginDialog({ open, active, busy, site, error, platforms, onClose, onSt
 }
 
 function HumanDialog({ request, error, onContinue, onCancel }) {
+  const { t, lang } = useI18n()
   if (!request) return null
   const isLogin = Boolean(request.require_login)
-  const label = request.label || platformLabel(request.site)
+  const label = t(request.label || platformLabel(request.site))
 
   return (
     <div className="modal-overlay">
       <div className="modal-card human-modal">
         <div className="modal-head">
           <div>
-            <div className="modal-title">{isLogin ? `登录${label}` : '需要你操作一下'}</div>
+            <div className="modal-title">{isLogin ? t('登录{label}', { label }) : t('需要你操作一下')}</div>
             <div className="modal-sub">
-              {isLogin ? '任务已暂停，登录成功后会自动继续' : '任务已暂停，等你完成浏览器里的操作'}
+              {isLogin ? t('任务已暂停，登录成功后会自动继续') : t('任务已暂停，等你完成浏览器里的操作')}
             </div>
           </div>
           <span className="live-pill">PAUSED</span>
         </div>
         <div className="human-reason">
           <Icon name="alert" size={18} />
-          <div>{request.reason || '网站要求登录或人工验证'}</div>
+          <div>{localizeBackendError(request.reason || t('网站要求登录或人工验证'), lang)}</div>
         </div>
         {isLogin ? (
           <p>
-            请在弹出的浏览器窗口中完成扫码/登录。检测到登录成功后会自动继续，不需要手动点击；
-            扫码失败可以直接取消任务。如果看不到浏览器窗口，请取消任务，并在设置中关闭“后台运行浏览器”后重试。
+            {t('请在弹出的浏览器窗口中完成扫码/登录。检测到登录成功后会自动继续，不需要手动点击；扫码失败可以直接取消任务。如果看不到浏览器窗口，请取消任务，并在设置中关闭“后台运行浏览器”后重试。')}
           </p>
         ) : (
           <p>
-            请在弹出的浏览器窗口中完成扫码、登录或验证码。完成后点击“继续任务”。
-            如果看不到浏览器窗口，请取消任务，并在设置中关闭“后台运行浏览器”后重试。
+            {t('请在弹出的浏览器窗口中完成扫码、登录或验证码。完成后点击“继续任务”。如果看不到浏览器窗口，请取消任务，并在设置中关闭“后台运行浏览器”后重试。')}
           </p>
         )}
         {error && (
           <div className="inline-error">
             <Icon name="alert" size={15} />
-            {error}
+            {localizeBackendError(error, lang)}
           </div>
         )}
         <div className="modal-actions">
           <button className="run-button" onClick={onContinue}>
             <Icon name="check" size={15} />
-            {isLogin ? '我已登录' : '继续任务'}
+            {isLogin ? t('我已登录') : t('继续任务')}
           </button>
           <button className="secondary-button" onClick={onCancel}>
-            取消任务
+            {t('取消任务')}
           </button>
         </div>
       </div>
@@ -1059,6 +1078,7 @@ function SettingsDrawer({
   onLoginSite,
   onSwitchAccount,
 }) {
+  const { t } = useI18n()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState('')
@@ -1086,8 +1106,8 @@ function SettingsDrawer({
       <div className="drawer" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-head">
           <div>
-            <div className="drawer-title">设置</div>
-            <div className="drawer-sub">模型、浏览器和输出</div>
+            <div className="drawer-title">{t('设置')}</div>
+            <div className="drawer-sub">{t('模型、浏览器和输出')}</div>
           </div>
           <button className="icon-button" onClick={onClose}>
             <Icon name="x" size={18} />
@@ -1095,9 +1115,9 @@ function SettingsDrawer({
         </div>
 
         <div className="drawer-section">
-          <div className="drawer-section-title">模型</div>
+          <div className="drawer-section-title">{t('模型')}</div>
           <label className="field">
-            <span>模型提供商</span>
+            <span>{t('模型提供商')}</span>
             <select
               value={settings.provider}
               onChange={(event) => {
@@ -1120,7 +1140,7 @@ function SettingsDrawer({
             </select>
           </label>
           <label className="field">
-            <span>模型名称</span>
+            <span>{t('模型名称')}</span>
             <input
               value={settings.model}
               onChange={(event) => setSettings((prev) => ({ ...prev, model: event.target.value }))}
@@ -1128,7 +1148,7 @@ function SettingsDrawer({
             />
           </label>
           <label className="field">
-            <span>上下文窗口（tokens，留空使用默认）</span>
+            <span>{t('上下文窗口（tokens，留空使用默认）')}</span>
             <input
               type="number"
               min="8000"
@@ -1139,7 +1159,7 @@ function SettingsDrawer({
               }
               placeholder={
                 providerInfo?.context_window
-                  ? `${providerInfo.context_window.toLocaleString()}（默认）`
+                  ? `${providerInfo.context_window.toLocaleString()}${t('（默认）')}`
                   : String(FALLBACK_CONTEXT_WINDOW)
               }
             />
@@ -1150,34 +1170,34 @@ function SettingsDrawer({
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder={providerInfo?.has_key ? '已保存，留空即可' : providerInfo?.placeholder || 'sk-...'}
+              placeholder={providerInfo?.has_key ? t('已保存，留空即可') : providerInfo?.placeholder || 'sk-...'}
             />
           </label>
           <label className="field">
-            <span>搜索引擎</span>
+            <span>{t('搜索引擎')}</span>
             <select
               value={settings.searchEngine || 'auto'}
               onChange={(event) => setSettings((prev) => ({ ...prev, searchEngine: event.target.value }))}
             >
               {SEARCH_ENGINES.map((engine) => (
                 <option key={engine.value} value={engine.value}>
-                  {engine.label}
+                  {t(engine.label)}
                 </option>
               ))}
             </select>
           </label>
           <div className={`key-status ${providerInfo?.has_key ? 'ready' : ''}`}>
             <span className="api-dot" />
-            {providerInfo?.has_key ? 'Key 已保存在本机' : '还没有保存这个提供商的 Key'}
+            {providerInfo?.has_key ? t('Key 已保存在本机') : t('还没有保存这个提供商的 Key')}
           </div>
         </div>
 
         <div className="drawer-section">
-          <div className="drawer-section-title">浏览器</div>
+          <div className="drawer-section-title">{t('浏览器')}</div>
           <label className="toggle-row">
             <span>
-              <strong>后台运行浏览器</strong>
-              <small>不显示 Chrome 窗口</small>
+              <strong>{t('后台运行浏览器')}</strong>
+              <small>{t('不显示 Chrome 窗口')}</small>
             </span>
             <input
               type="checkbox"
@@ -1187,8 +1207,8 @@ function SettingsDrawer({
           </label>
           <label className="toggle-row">
             <span>
-              <strong>视觉模式</strong>
-              <small>网页截图 + 上传图片，需要模型支持视觉</small>
+              <strong>{t('视觉模式')}</strong>
+              <small>{t('网页截图 + 上传图片，需要模型支持视觉')}</small>
             </span>
             <input
               type="checkbox"
@@ -1198,8 +1218,8 @@ function SettingsDrawer({
           </label>
           <label className="toggle-row">
             <span>
-              <strong>视频音频转录</strong>
-              <small>使用已保存的 OpenAI 或 Google Gemini Key；未配置时只分析画面</small>
+              <strong>{t('视频音频转录')}</strong>
+              <small>{t('使用已保存的 OpenAI 或 Google Gemini Key；未配置时只分析画面')}</small>
             </span>
             <input
               type="checkbox"
@@ -1208,7 +1228,7 @@ function SettingsDrawer({
             />
           </label>
           <label className="field">
-            <span>最大步数：{settings.maxSteps}</span>
+            <span>{t('最大步数：{count}', { count: settings.maxSteps })}</span>
             <input
               type="range"
               min="10"
@@ -1221,14 +1241,14 @@ function SettingsDrawer({
         </div>
 
         <div className="drawer-section">
-          <div className="drawer-section-title">平台登录</div>
+          <div className="drawer-section-title">{t('平台登录')}</div>
           {(platforms || []).map((item) => (
             <div className="platform-row" key={item.site}>
-              <span className="platform-name">{item.label}</span>
+              <span className="platform-name">{t(item.label)}</span>
               {item.logged_in ? (
                 <>
                   <span className="platform-note">{formatLoginDate(item.last_login_at)}</span>
-                  <span className="platform-status ready">已登录</span>
+                  <span className="platform-status ready">{t('已登录')}</span>
                   {switchSite === item.site ? (
                     <button
                       className="soft-chip danger"
@@ -1237,62 +1257,79 @@ function SettingsDrawer({
                         onSwitchAccount(item.site)
                       }}
                     >
-                      确认切换
+                      {t('确认切换')}
                     </button>
                   ) : (
                     <button className="soft-chip" onClick={() => setSwitchSite(item.site)}>
-                      切换账号
+                      {t('切换账号')}
                     </button>
                   )}
                 </>
               ) : (
                 <button className="soft-chip" onClick={() => onLoginSite(item.site)}>
-                  登录
+                  {t('登录')}
                 </button>
               )}
             </div>
           ))}
           <p className="drawer-hint" style={{ marginTop: 10 }}>
-            登录状态保存在本机，重启 App 后不需要重复扫码。
+            {t('登录状态保存在本机，重启 App 后不需要重复扫码。')}
           </p>
         </div>
 
         <div className="drawer-section">
-          <div className="drawer-section-title">外观</div>
+          <div className="drawer-section-title">{t('外观')}</div>
           <div className="theme-switch">
             <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')}>
               <Icon name="sun" size={15} />
-              浅色
+              {t('浅色')}
             </button>
             <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')}>
               <Icon name="moon" size={15} />
-              深色
+              {t('深色')}
             </button>
           </div>
         </div>
 
         <div className="drawer-section">
-          <div className="drawer-section-title">数据与卸载</div>
+          <div className="drawer-section-title">{t('语言')}</div>
+          <p className="drawer-hint">{t('界面语言')}</p>
+          <div className="theme-switch">
+            {LANGUAGES.map((item) => (
+              <button
+                key={item.value}
+                className={settings.language === item.value ? 'active' : ''}
+                onClick={() => setSettings((prev) => ({ ...prev, language: item.value }))}
+              >
+                <Icon name="globe" size={15} />
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="drawer-section">
+          <div className="drawer-section-title">{t('数据与卸载')}</div>
           <p className="drawer-hint">
-            浏览器、任务记录、登录状态和下载文件都保存在一个文件夹内。把 BrowserBuddy 拖到废纸篓即可删除应用本身；下面的按钮会清除全部本地数据。
+            {t('浏览器、任务记录、登录状态和下载文件都保存在一个文件夹内。把 BrowserBuddy 拖到废纸篓即可删除应用本身；下面的按钮会清除全部本地数据。')}
           </p>
           <button className="secondary-button wide" onClick={onOpenData}>
             <Icon name="folder" size={15} />
-            打开数据文件夹
+            {t('打开数据文件夹')}
           </button>
           {confirmDelete ? (
             <div className="delete-confirm">
               <div>
                 <Icon name="alert" size={15} />
-                将删除任务记录、登录状态、下载文件、浏览器配置和设置，且无法恢复。
+                {t('将删除任务记录、登录状态、下载文件、浏览器配置和设置，且无法恢复。')}
               </div>
               <div className="delete-actions">
                 <button className="soft-chip" onClick={() => setConfirmDelete(false)} disabled={deleteBusy}>
-                  取消
+                  {t('取消')}
                 </button>
                 <button className="danger-button" onClick={handleDeleteData} disabled={deleteBusy}>
                   <Icon name="trash" size={14} />
-                  {deleteBusy ? '正在删除…' : '确认彻底删除'}
+                  {deleteBusy ? t('正在删除…') : t('确认彻底删除')}
                 </button>
               </div>
             </div>
@@ -1303,19 +1340,19 @@ function SettingsDrawer({
               style={{ marginTop: 8 }}
             >
               <Icon name="trash" size={15} />
-              彻底删除本地数据
+              {t('彻底删除本地数据')}
             </button>
           )}
-          {deleteError ? <div className="inline-error">{deleteError}</div> : null}
+          {deleteError ? <div className="inline-error">{localizeBackendError(deleteError, settings.language)}</div> : null}
         </div>
 
         <button className="secondary-button wide" onClick={onLogs}>
           <Icon name="terminal" size={15} />
-          打开日志目录
+          {t('打开日志目录')}
         </button>
         <button className="secondary-button wide" onClick={onDownloads} style={{ marginTop: 8 }}>
           <Icon name="download" size={15} />
-          打开下载文件夹
+          {t('打开下载文件夹')}
         </button>
       </div>
     </div>
@@ -1327,7 +1364,7 @@ function newId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function buildContextMessages(messages) {
+function buildContextMessages(messages, language = 'zh') {
   return (messages || [])
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .map((message) => {
@@ -1336,15 +1373,13 @@ function buildContextMessages(messages) {
       const files = (result.files || []).map((file) => file.display_name || file.name).filter(Boolean)
       const attachmentNames = (message.attachments || []).map((item) => item.name).filter(Boolean)
       const attachmentIds = (message.attachments || []).map((item) => item.id).filter(Boolean)
+      const attachmentNote = attachmentNames.length
+        ? language === 'en'
+          ? `(Attachments: ${attachmentNames.join(', ')})`
+          : `（附件：${attachmentNames.join('、')}）`
+        : ''
       const text =
-        message.role === 'user'
-          ? [
-              message.text,
-              attachmentNames.length ? `（附件：${attachmentNames.join('、')}）` : '',
-            ]
-              .filter(Boolean)
-              .join('\n')
-          : result.text || ''
+        message.role === 'user' ? [message.text, attachmentNote].filter(Boolean).join('\n') : result.text || ''
       return {
         role: message.role,
         text: text.slice(0, 4000),
@@ -1357,11 +1392,16 @@ function buildContextMessages(messages) {
 }
 
 function TraceList({ steps, running, mode }) {
+  const { t } = useI18n()
   if (!steps.length) {
     return running ? (
       <div className="activity-empty">
         <Icon name="loader" size={16} className="spin" />
-        {mode === 'browser' ? '正在启动浏览器...' : mode === 'chat' ? '正在处理任务...' : '正在分析任务...'}
+        {mode === 'browser'
+          ? t('正在启动浏览器...')
+          : mode === 'chat'
+            ? t('正在处理任务...')
+            : t('正在分析任务...')}
       </div>
     ) : null
   }
@@ -1386,7 +1426,7 @@ function TraceList({ steps, running, mode }) {
                   ))}
                 </span>
               </div>
-              <div className="timeline-goal">{step.goal || '执行中'}</div>
+              <div className="timeline-goal">{step.goal || t('执行中')}</div>
             </div>
           </div>
         )
@@ -1396,6 +1436,7 @@ function TraceList({ steps, running, mode }) {
 }
 
 function UserMessage({ message, onCopy }) {
+  const { t } = useI18n()
   return (
     <div className="chat-message user">
       <div className="user-message-stack">
@@ -1427,9 +1468,9 @@ function UserMessage({ message, onCopy }) {
             ))}
           </div>
         )}
-        <button className="user-copy-button" onClick={() => onCopy(message.text)} title="复制这条输入">
+        <button className="user-copy-button" onClick={() => onCopy(message.text)} title={t('复制这条输入')}>
           <Icon name="copy" size={12} />
-          复制
+          {t('复制')}
         </button>
       </div>
     </div>
@@ -1437,6 +1478,7 @@ function UserMessage({ message, onCopy }) {
 }
 
 function AssistantMessage({ message, onCopy, onDownload, onDownloads }) {
+  const { t } = useI18n()
   const result = message.result || {}
   return (
     <div className="chat-message assistant">
@@ -1448,14 +1490,14 @@ function AssistantMessage({ message, onCopy, onDownload, onDownloads }) {
           <span>BrowserBuddy</span>
           {result.duration ? <span>{result.duration}s</span> : null}
           {result.steps ? <span>{result.steps} steps</span> : null}
-          {result.success === false ? <span className="message-warning">部分完成</span> : null}
+          {result.success === false ? <span className="message-warning">{t('部分完成')}</span> : null}
         </div>
 
         <Markdown text={result.text || ''} />
 
         {result.sources?.length > 0 && (
           <div className="sources-block">
-            <div className="result-section-head">来源</div>
+            <div className="result-section-head">{t('来源')}</div>
             <div className="sources-grid">
               {result.sources.map((source) => (
                 <SourceCard key={source.url} source={source} />
@@ -1468,19 +1510,23 @@ function AssistantMessage({ message, onCopy, onDownload, onDownloads }) {
 
         {message.steps?.length > 0 && (
           <details className="message-trace">
-            <summary>执行轨迹 · {message.steps.length} steps</summary>
+            <summary>{t('执行轨迹 · {count} steps', { count: message.steps.length })}</summary>
             <TraceList steps={message.steps} running={false} />
           </details>
         )}
 
         <div className="message-actions">
-          <button className="icon-button" onClick={() => onCopy(result.text || '')} title="复制结果">
+          <button className="icon-button" onClick={() => onCopy(result.text || '')} title={t('复制结果')}>
             <Icon name="copy" size={15} />
           </button>
-          <button className="icon-button" onClick={() => onDownload(result.text || '', message.ts)} title="导出 Markdown">
+          <button
+            className="icon-button"
+            onClick={() => onDownload(result.text || '', message.ts)}
+            title={t('导出 Markdown')}
+          >
             <Icon name="download" size={15} />
           </button>
-          <button className="icon-button" onClick={onDownloads} title="打开下载文件夹">
+          <button className="icon-button" onClick={onDownloads} title={t('打开下载文件夹')}>
             <Icon name="folder" size={15} />
           </button>
         </div>
@@ -1490,6 +1536,7 @@ function AssistantMessage({ message, onCopy, onDownload, onDownloads }) {
 }
 
 function LiveMessage({ steps, mode }) {
+  const { t } = useI18n()
   return (
     <div className="chat-message assistant live">
       <div className="assistant-avatar">
@@ -1498,7 +1545,7 @@ function LiveMessage({ steps, mode }) {
       <div className="message-body">
         <div className="message-meta">
           <span>BrowserBuddy</span>
-          <span className="live-label">正在执行</span>
+          <span className="live-label">{t('正在执行')}</span>
         </div>
         <TraceList steps={steps} running mode={mode} />
       </div>
@@ -1522,6 +1569,7 @@ function ChatComposer({
   onFilesSelected,
   onRemoveAttachment,
 }) {
+  const { t } = useI18n()
   const fileInputRef = useRef(null)
   const canSend = value.trim() && !running && !disabled && !uploading
 
@@ -1564,11 +1612,11 @@ function ChatComposer({
                 <Icon name="file" size={13} />
               )}
               <span className="attachment-name">{attachment.name}</span>
-              <span className="attachment-meta">{attachmentMeta(attachment, settings.useVision)}</span>
+              <span className="attachment-meta">{attachmentMeta(attachment, settings.useVision, t)}</span>
               <button
                 className="attachment-remove"
                 onClick={() => onRemoveAttachment(attachment.id)}
-                title="移除文件"
+                title={t('移除文件')}
               >
                 <Icon name="x" size={11} />
               </button>
@@ -1601,10 +1649,10 @@ function ChatComposer({
             className="soft-chip attach-chip"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
-            title={`最多 ${MAX_ATTACHMENTS} 个文件；${fileLimitLabel()}`}
+            title={t('最多 {count} 个文件；{limits}', { count: MAX_ATTACHMENTS, limits: t(fileLimitLabel()) })}
           >
             <Icon name="paperclip" size={14} />
-            {uploading ? '上传中…' : '文件'}
+            {uploading ? t('上传中…') : t('文件')}
           </button>
           <button className="soft-chip" onClick={onSettings}>
             <Icon name="settings" size={14} />
@@ -1612,11 +1660,11 @@ function ChatComposer({
           </button>
           <span className="soft-chip">
             <Icon name={settings.useVision ? 'image' : 'terminal'} size={14} />
-            {settings.useVision ? '视觉模式' : 'DOM 模式'}
+            {settings.useVision ? t('视觉模式') : t('DOM 模式')}
           </span>
           <span className="soft-chip">
             <Icon name="search" size={14} />
-            {searchEngineLabel(settings.searchEngine)}
+            {searchEngineLabel(settings.searchEngine, settings.language)}
           </span>
           {value.length >= 2000 && (
             <span className={`char-counter ${value.length >= INPUT_MAX_CHARS ? 'limit' : ''}`}>
@@ -1626,19 +1674,19 @@ function ChatComposer({
           {running && (
             <span className="soft-chip running-chip">
               <Icon name="loader" size={14} className="spin" />
-              正在执行
+              {t('正在执行')}
             </span>
           )}
         </div>
         {running ? (
           <button className="stop-button composer-stop" onClick={onStop}>
             <Icon name="stop" size={14} />
-            停止任务
+            {t('停止任务')}
           </button>
         ) : (
           <button className="run-button" onClick={send} disabled={!canSend}>
             <Icon name="play" size={15} />
-            发送
+            {t('发送')}
             <span className="kbd">↵</span>
           </button>
         )}
@@ -1664,10 +1712,11 @@ function WelcomeView({
   onFilesSelected,
   onRemoveAttachment,
 }) {
+  const { t, lang } = useI18n()
   return (
     <div className="welcome-view">
       <div className="topbar topbar-home">
-        <div className="topbar-title">新对话</div>
+        <div className="topbar-title">{t('新对话')}</div>
         <button className="model-chip" onClick={onSettings}>
           <span className="model-dot" />
           {settings.provider} · {settings.model}
@@ -1680,13 +1729,13 @@ function WelcomeView({
           <Icon name="sparkles" size={14} />
           Browser agent
         </div>
-        <h1>今天想让浏览器做什么？</h1>
-        <p>描述一个目标，BrowserBuddy 会规划步骤、操作浏览器，并把结果和来源整理给你。</p>
+        <h1>{t('今天想让浏览器做什么？')}</h1>
+        <p>{t('描述一个目标，BrowserBuddy 会规划步骤、操作浏览器，并把结果和来源整理给你。')}</p>
 
         {loginActive && (
           <div className="inline-error">
             <Icon name="login" size={15} />
-            请先完成购物网站登录，或取消登录后再开始任务。
+            {t('请先完成购物网站登录，或取消登录后再开始任务。')}
           </div>
         )}
 
@@ -1698,7 +1747,7 @@ function WelcomeView({
           disabled={disabled}
           settings={settings}
           onSettings={onSettings}
-          placeholder="例如：搜索 browser automation，总结前 3 个结果并附上链接"
+          placeholder={t('例如：搜索 browser automation，总结前 3 个结果并附上链接')}
           attachments={attachments}
           uploading={uploading}
           attachmentError={attachmentError}
@@ -1714,27 +1763,34 @@ function WelcomeView({
         )}
 
         <div className="examples-head">
-          <span>试试这些</span>
-          <span className="examples-sub">点击示例快速填入任务</span>
+          <span>{t('试试这些')}</span>
+          <span className="examples-sub">{t('点击示例快速填入任务')}</span>
         </div>
         <div className="examples-grid">
-          {EXAMPLES.map((example) => (
-            <button key={example.id} className="example-card" onClick={() => onExample(example.task)}>
-              <span className="example-icon">
-                <Icon name={example.icon} size={18} />
-              </span>
-              <span className="example-body">
-                <span className="example-title">{example.title}</span>
-                <span className="example-subtitle">{example.subtitle}</span>
-              </span>
-              <span className="example-tag">{example.tag}</span>
-            </button>
-          ))}
+          {EXAMPLES.map((example) => {
+            const localized = lang === 'en' && EXAMPLES_EN[example.id] ? { ...example, ...EXAMPLES_EN[example.id] } : example
+            return (
+              <button
+                key={example.id}
+                className="example-card"
+                onClick={() => onExample(localized.task)}
+              >
+                <span className="example-icon">
+                  <Icon name={example.icon} size={18} />
+                </span>
+                <span className="example-body">
+                  <span className="example-title">{localized.title}</span>
+                  <span className="example-subtitle">{localized.subtitle}</span>
+                </span>
+                <span className="example-tag">{localized.tag}</span>
+              </button>
+            )
+          })}
         </div>
 
         <div className="home-footnote">
           <Icon name="key" size={14} />
-          API Key 保存在本机私有配置（仅当前用户可读），不会写进代码或日志。
+          {t('API Key 保存在本机私有配置（仅当前用户可读），不会写进代码或日志。')}
         </div>
       </div>
     </div>
@@ -1766,6 +1822,7 @@ function ChatView({
   onFilesSelected,
   onRemoveAttachment,
 }) {
+  const { t, lang } = useI18n()
   const bottomRef = useRef(null)
   const lastAssistant = [...(thread.messages || [])].reverse().find((message) => message.role === 'assistant')
   const lastResult = lastAssistant?.result
@@ -1789,21 +1846,21 @@ function ChatView({
     <div className="chat-view">
       <div className="topbar">
         <div className="run-title" title={thread.title}>
-          {thread.title || '对话'}
+          {thread.title || t('对话')}
         </div>
         <div className="topbar-actions">
           <StatusPill running={running} result={lastResult} error={error} />
           {running ? (
             <button className="stop-button" onClick={onStop}>
               <Icon name="stop" size={14} />
-              停止
+              {t('停止')}
             </button>
           ) : (
-            <button className="icon-button" onClick={onLogs} title="打开日志">
+            <button className="icon-button" onClick={onLogs} title={t('打开日志')}>
               <Icon name="terminal" size={17} />
             </button>
           )}
-          <button className="icon-button" onClick={onSettings} title="设置">
+          <button className="icon-button" onClick={onSettings} title={t('设置')}>
             <Icon name="settings" size={17} />
           </button>
         </div>
@@ -1828,7 +1885,7 @@ function ChatView({
           {error && (
             <div className="chat-error">
               <Icon name="alert" size={16} />
-              <div>{error}</div>
+              <div>{localizeBackendError(error, lang)}</div>
             </div>
           )}
           <div ref={bottomRef} />
@@ -1842,21 +1899,24 @@ function ChatView({
             <div>
               <strong>
                 {contextLevel === 'critical'
-                  ? '上下文接近模型窗口上限'
+                  ? t('上下文接近模型窗口上限')
                   : contextLevel === 'warn'
-                    ? '上下文已使用较多'
-                    : '这段对话已经比较长'}
+                    ? t('上下文已使用较多')
+                    : t('这段对话已经比较长')}
               </strong>
               <span>
-                按完整历史估算约 {formatTokenCount(contextStats.tokens)} / {formatTokenCount(windowSize)} tokens
-                （{Math.round(contextRatio * 100)}%）。
+                {t('按完整历史估算约 {tokens} / {window} tokens（{percent}%）。', {
+                  tokens: formatTokenCount(contextStats.tokens),
+                  window: formatTokenCount(windowSize),
+                  percent: Math.round(contextRatio * 100),
+                })}
                 {contextLevel === 'critical'
-                  ? '继续可能触发模型窗口限制，请新建对话后继续。'
-                  : '执行时会自动压缩较早内容；如果发现模型开始忘记早期约束，建议新建对话。'}
+                  ? t('继续可能触发模型窗口限制，请新建对话后继续。')
+                  : t('执行时会自动压缩较早内容；如果发现模型开始忘记早期约束，建议新建对话。')}
               </span>
             </div>
             <button className="soft-chip" onClick={onNew}>
-              新建对话
+              {t('新建对话')}
             </button>
           </div>
         )}
@@ -1869,7 +1929,7 @@ function ChatView({
           disabled={disabled}
           settings={settings}
           onSettings={onSettings}
-          placeholder="继续提问，或输入新的任务…"
+          placeholder={t('继续提问，或输入新的任务…')}
           attachments={attachments}
           uploading={uploading}
           attachmentError={attachmentError}
@@ -1884,6 +1944,8 @@ function ChatView({
 export default function App() {
   const [providers, setProviders] = useState([])
   const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS })
+  const language = settings.language || DEFAULT_LANGUAGE
+  const t = useCallback((text, params) => translate(text, language, params), [language])
   const [apiKey, setApiKey] = useState('')
   const [threads, setThreads] = useState([])
   const [activeThreadId, setActiveThreadId] = useState(null)
@@ -1929,31 +1991,31 @@ export default function App() {
       for (const file of files) {
         const limit = fileLimitMb(file)
         if (file.size > limit * 1024 * 1024) {
-          warnings.push(`${file.name} 超过 ${limit}MB`)
+          warnings.push(t('{name} 超过 {limit}MB', { name: file.name, limit }))
         } else {
           accepted.push(file)
         }
       }
       if (!accepted.length) {
-        setAttachmentError(warnings.join('；') || '没有可上传的文件')
+        setAttachmentError(warnings.join('；') || t('没有可上传的文件'))
         return
       }
 
       const existingBytes = attachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0)
       const newBytes = accepted.reduce((sum, file) => sum + file.size, 0)
       if (existingBytes + newBytes > MAX_TOTAL_ATTACHMENT_MB * 1024 * 1024) {
-        setAttachmentError(`单次上传总大小不能超过 ${MAX_TOTAL_ATTACHMENT_MB}MB`)
+        setAttachmentError(t('单次上传总大小不能超过 {limit}MB', { limit: MAX_TOTAL_ATTACHMENT_MB }))
         return
       }
 
       const room = MAX_ATTACHMENTS - attachments.length
       if (room <= 0) {
-        setAttachmentError(`最多添加 ${MAX_ATTACHMENTS} 个文件`)
+        setAttachmentError(t('最多添加 {count} 个文件', { count: MAX_ATTACHMENTS }))
         return
       }
       const selected = accepted.slice(0, room)
       if (accepted.length > room) {
-        warnings.push(`最多 ${MAX_ATTACHMENTS} 个文件，已忽略多余文件`)
+        warnings.push(t('最多 {count} 个文件，已忽略多余文件', { count: MAX_ATTACHMENTS }))
       }
       const epoch = uploadEpochRef.current
       setAttachmentError(warnings.join('；'))
@@ -1964,20 +2026,22 @@ export default function App() {
         setAttachments((prev) => [...prev, ...uploaded])
         const failed = uploaded.filter((file) => file.error)
         if (failed.length) {
-          warnings.push(...failed.map((file) => `${file.name}: ${file.error}`))
+          warnings.push(...failed.map((file) => `${file.name}: ${localizeBackendError(file.error, language)}`))
         }
         const visual = uploaded.filter((file) => isImageAttachment(file) || isVideoAttachment(file))
         if (visual.length && !settings.useVision) {
-          warnings.push('图片/视频需要开启「视觉模式」才能被模型理解')
+          warnings.push(t('图片/视频需要开启「视觉模式」才能被模型理解'))
         }
         setAttachmentError(warnings.join('；'))
       } catch (e) {
-        if (uploadEpochRef.current === epoch) setAttachmentError([...warnings, e.message].filter(Boolean).join('；'))
+        if (uploadEpochRef.current === epoch) {
+          setAttachmentError([...warnings, localizeBackendError(e.message, language)].filter(Boolean).join('；'))
+        }
       } finally {
         if (uploadEpochRef.current === epoch) setUploading(false)
       }
     },
-    [attachments, settings.useVision],
+    [attachments, settings.useVision, t, language],
   )
 
   const handleRemoveAttachment = useCallback((uploadId) => {
@@ -2052,6 +2116,10 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
+    document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN'
+  }, [language])
+
+  useEffect(() => {
     if (!prefsLoadedRef.current) return
     const timer = setTimeout(() => {
       savePreferences({ settings, theme, themeRevision: THEME_REVISION }).catch(() => {})
@@ -2120,13 +2188,17 @@ export default function App() {
         if (event.success) {
           setLoginOpen(false)
           setLoginError('')
-          showToast(`${event.label || platformLabel(event.site)}登录成功`)
+          showToast(t('{label}登录成功', { label: t(event.label || platformLabel(event.site)) }))
         } else if (event.cancelled) {
           setLoginOpen(false)
           setLoginError('')
-          showToast('已关闭登录窗口')
+          showToast(t('已关闭登录窗口'))
         } else {
-          setLoginError(`还没有检测到${event.label || '该平台'}登录成功，请先在浏览器里完成扫码。`)
+          setLoginError(
+            t('还没有检测到{label}登录成功，请先在浏览器里完成扫码。', {
+              label: t(event.label || '该平台'),
+            }),
+          )
         }
         return
       }
@@ -2145,9 +2217,9 @@ export default function App() {
         setHumanError('')
         if (Array.isArray(event.logins)) setPlatforms(event.logins)
         if (event.login_success) {
-          showToast(`${event.label || platformLabel(event.site)}登录成功，任务继续`)
+          showToast(t('{label}登录成功，任务继续', { label: t(event.label || platformLabel(event.site)) }))
         } else if (event.cancelled) {
-          showToast('已取消任务')
+          showToast(t('已取消任务'))
         }
         return
       }
@@ -2174,7 +2246,7 @@ export default function App() {
       }
       if (event.type === 'stopped') {
         appendAssistant({
-          text: '任务已被手动停止。',
+          text: t('任务已被手动停止。'),
           sources: [],
           files: [],
           images: [],
@@ -2185,9 +2257,9 @@ export default function App() {
         return
       }
       if (event.type === 'error') {
-        if (event.context_overflow) showToast('上下文超过模型窗口，请新建对话')
+        if (event.context_overflow) showToast(t('上下文超过模型窗口，请新建对话'))
         appendAssistant({
-          text: `运行失败：${event.message}`,
+          text: t('运行失败：{message}', { message: localizeBackendError(event.message, language) }),
           sources: [],
           files: [],
           images: [],
@@ -2202,7 +2274,7 @@ export default function App() {
         setLiveMode(null)
       }
     },
-    [appendAssistant, showToast],
+    [appendAssistant, showToast, t, language],
   )
 
   useEffect(() => {
@@ -2294,7 +2366,7 @@ export default function App() {
           setHumanRequest({ reason: state.human_reason || '网站要求人工操作' })
         }
       } catch (e) {
-        setError(e.message)
+        setError(localizeBackendError(e.message, language))
       } finally {
         prefsLoadedRef.current = true
       }
@@ -2367,11 +2439,15 @@ export default function App() {
       const artifactCount = Array.isArray(result?.deleted_artifacts) ? result.deleted_artifacts.length : 0
       const uploadCount = Array.isArray(result?.deleted_uploads) ? result.deleted_uploads.length : 0
       const cleared = []
-      if (artifactCount) cleared.push(`${artifactCount} 个附件`)
-      if (uploadCount) cleared.push(`${uploadCount} 个上传文件`)
-      showToast(cleared.length ? `已删除对话，并清理 ${cleared.join('、')}` : '已删除对话')
+      if (artifactCount) cleared.push(t('{count} 个附件', { count: artifactCount }))
+      if (uploadCount) cleared.push(t('{count} 个上传文件', { count: uploadCount }))
+      showToast(
+        cleared.length
+          ? t('已删除对话，并清理 {items}', { items: cleared.join(language === 'en' ? ', ' : '、') })
+          : t('已删除对话'),
+      )
     } catch (e) {
-      setError(e.message)
+      setError(localizeBackendError(e.message, language))
     }
   }
 
@@ -2379,14 +2455,14 @@ export default function App() {
     const clean = (text || '').trim()
     if (!clean || running || uploading) return
     if (loginActive) {
-      setError('请先完成购物网站登录，或取消登录后再发送。')
+      setError(t('请先完成购物网站登录，或取消登录后再发送。'))
       return
     }
 
     const now = Date.now()
     const current = activeThread
     const outgoingAttachments = attachments
-    const contextMessages = buildContextMessages(current?.messages || [])
+    const contextMessages = buildContextMessages(current?.messages || [], language)
     const threadId = current?.id || newId()
     const userMessage = {
       role: 'user',
@@ -2455,7 +2531,7 @@ export default function App() {
         setApiKey('')
       }
     } catch (e) {
-      setError(e.message)
+      setError(localizeBackendError(e.message, language))
       setRunning(false)
       pendingThreadRef.current = null
     }
@@ -2465,13 +2541,13 @@ export default function App() {
     try {
       await stopTask()
     } catch (e) {
-      setError(e.message)
+      setError(localizeBackendError(e.message, language))
     }
   }
 
   async function handleCopy(text) {
     const copied = await copyToClipboard(text)
-    setToast(copied ? '已复制' : '复制失败')
+    setToast(copied ? t('已复制') : t('复制失败'))
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     toastTimerRef.current = setTimeout(() => setToast(''), 1500)
   }
@@ -2497,7 +2573,7 @@ export default function App() {
       setLoginSite(result.site || site)
       setLoginOpen(true)
     } catch (e) {
-      setLoginError(e.message)
+      setLoginError(localizeBackendError(e.message, language))
     } finally {
       setLoginBusy(false)
     }
@@ -2514,7 +2590,7 @@ export default function App() {
       setLoginOpen(true)
       await handleLoginStart(site)
     } catch (e) {
-      setLoginError(e.message)
+      setLoginError(localizeBackendError(e.message, language))
       setLoginOpen(true)
     }
   }
@@ -2525,7 +2601,7 @@ export default function App() {
       // SSE handler decides whether to close the dialog or show an error.
       await finishLogin()
     } catch (e) {
-      setLoginError(e.message)
+      setLoginError(localizeBackendError(e.message, language))
     }
   }
 
@@ -2534,7 +2610,7 @@ export default function App() {
       // Closing the login window is always allowed; the SSE handler reports it.
       await cancelLogin()
     } catch (e) {
-      setLoginError(e.message)
+      setLoginError(localizeBackendError(e.message, language))
     }
   }
 
@@ -2545,7 +2621,7 @@ export default function App() {
       setHumanError('')
     } catch (e) {
       // Keep the dialog open: a login wall only clears after a real login.
-      setHumanError(e.message)
+      setHumanError(localizeBackendError(e.message, language))
     }
   }
 
@@ -2555,12 +2631,13 @@ export default function App() {
       setHumanRequest(null)
       setHumanError('')
     } catch (e) {
-      setHumanError(e.message)
+      setHumanError(localizeBackendError(e.message, language))
     }
   }
 
   return (
-    <div className="app-shell">
+    <I18nContext.Provider value={{ lang: language, t }}>
+      <div className="app-shell">
       <Sidebar
         history={sidebarEntries}
         activeId={activeThreadId}
@@ -2672,6 +2749,7 @@ export default function App() {
         onCancel={handleHumanCancel}
       />
       {toast && <div className="app-toast">{toast}</div>}
-    </div>
+      </div>
+    </I18nContext.Provider>
   )
 }

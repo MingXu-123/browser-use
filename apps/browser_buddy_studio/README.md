@@ -112,6 +112,7 @@ needs right-click → Open → Open.
 - Configurable search engine with automatic regional fallback (Bing 中国 → 搜狗 → 百度 → 360 → Bing 国际 → Google → DuckDuckGo)
 - Persistent login for Taobao, JD, Xiaohongshu, and Douyin
 - ChatGPT-style light/dark themes (neutral gray + green accent, light by default)
+- Bilingual interface: 中文 / English, switchable in Settings and persisted per user (system language by default)
 - Keyboard shortcuts:
   - `⌘N` new task
   - `⌘Enter` run
