@@ -357,6 +357,25 @@ def _audio_transcription_config(request: RunRequest, active_key: str) -> dict[st
 	return None
 
 
+AGENT_VISUAL_INPUTS = 8
+
+
+def _build_image_parts(images: list[dict]) -> list[ContentPartTextParam | ContentPartImageParam]:
+	parts: list[ContentPartTextParam | ContentPartImageParam] = []
+	for image in images:
+		parts.append(ContentPartTextParam(text=f'用户上传的图片：{image["name"]}'))
+		parts.append(
+			ContentPartImageParam(
+				image_url=ImageURL(
+					url=f'data:{image["media_type"]};base64,{image["data"]}',
+					media_type=image['media_type'],
+					detail='auto',
+				)
+			)
+		)
+	return parts
+
+
 CONTEXT_OVERFLOW_HINTS = (
 	'context length',
 	'context window',
@@ -839,18 +858,8 @@ async def _run_agent(request: RunRequest) -> None:
 		attachment_records = load_attachments(request.attachments)
 		attachment_context = format_attachments_for_prompt(attachment_records)
 		attachment_images = load_attachment_images(attachment_records) if request.use_vision else []
-		image_parts: list[ContentPartTextParam | ContentPartImageParam] = []
-		for image in attachment_images:
-			image_parts.append(ContentPartTextParam(text=f'用户上传的图片：{image["name"]}'))
-			image_parts.append(
-				ContentPartImageParam(
-					image_url=ImageURL(
-						url=f'data:{image["media_type"]};base64,{image["data"]}',
-						media_type=image['media_type'],
-						detail='auto',
-					)
-				)
-			)
+		image_parts = _build_image_parts(attachment_images)
+		agent_image_parts = _build_image_parts(attachment_images[:AGENT_VISUAL_INPUTS])
 
 		audio_config = _audio_transcription_config(request, key)
 		audio_sections: list[str] = []
@@ -979,7 +988,7 @@ async def _run_agent(request: RunRequest) -> None:
 			auto_recovery=True,
 			use_judge=False,
 			available_file_paths=available_file_paths or None,
-			sample_images=image_parts or None,
+			sample_images=agent_image_parts or None,
 			# A login/QR wait can take several minutes; the default 120s step
 			# timeout would otherwise abort the paused task.
 			step_timeout=600,

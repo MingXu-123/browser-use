@@ -42,6 +42,7 @@ MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_CHARS_PER_FILE = 15_000
 MAX_TOTAL_PROMPT_CHARS = 40_000
 MAX_PDF_PAGES = 300
+MAX_VISUAL_INPUTS = 20
 UPLOAD_ID_RE = re.compile(r'^[0-9a-f]{32}$')
 
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
@@ -219,7 +220,7 @@ def _extract(path: Path) -> tuple[str, str, bool, str | None, str | None]:
 			if suffix in IMAGE_SUFFIXES:
 				note = '图片文件；视觉模式下会作为图片内容发送给模型，同时保留原始文件用于上传'
 			elif suffix in VIDEO_SUFFIXES:
-				note = '视频文件；视觉模式下会提取关键帧，音频会在配置 OpenAI/Gemini Key 后转录；原始视频保留用于上传'
+				note = '视频文件；视觉模式下会按时长提取多张关键帧（最多 20 张），音频会在配置 OpenAI/Gemini Key 后转录'
 			else:
 				note = '暂不支持提取该文件类型的文本，原始文件已附加'
 	except Exception as e:
@@ -360,6 +361,21 @@ def _probe_video_duration(ffmpeg: str, path: Path) -> float:
 	return 0.0
 
 
+def _video_frame_count(duration: float) -> int:
+	"""More frames for longer videos, with a hard cap for token cost."""
+	if duration <= 0:
+		return 4
+	if duration <= 30:
+		return 6
+	if duration <= 120:
+		return 8
+	if duration <= 600:
+		return 12
+	if duration <= 1800:
+		return 16
+	return 20
+
+
 def _video_frame_images(path: Path, name: str, max_frames: int) -> list[dict]:
 	"""Extract evenly spaced keyframes from a video with the bundled ffmpeg."""
 	if imageio_ffmpeg is None or max_frames <= 0:
@@ -371,7 +387,8 @@ def _video_frame_images(path: Path, name: str, max_frames: int) -> list[dict]:
 		return []
 
 	duration = _probe_video_duration(ffmpeg, path)
-	timestamps = [duration * (index + 0.5) / max_frames for index in range(max_frames)] if duration > 0 else [0.0]
+	target_frames = min(_video_frame_count(duration), max_frames)
+	timestamps = [duration * (index + 0.5) / target_frames for index in range(target_frames)] if duration > 0 else [0.0]
 	frames: list[dict] = []
 	with tempfile.TemporaryDirectory(prefix='browserbuddy-video-') as temp_dir:
 		for index, timestamp in enumerate(timestamps):
@@ -412,11 +429,11 @@ def _video_frame_images(path: Path, name: str, max_frames: int) -> list[dict]:
 	return frames
 
 
-def load_attachment_images(records: list[dict], limit: int = 8) -> list[dict]:
+def load_attachment_images(records: list[dict], limit: int = MAX_VISUAL_INPUTS) -> list[dict]:
 	"""Return downscaled base64 images for vision-capable LLMs.
 
-	Images are sent directly. Videos are represented by up to four evenly
-	spaced keyframes. The audio track is not transcribed yet.
+	Images are sent directly. Videos are represented by an adaptive number of
+	evenly spaced keyframes (more for longer videos, capped by ``limit``).
 	"""
 	images: list[dict] = []
 	for record in records:
@@ -431,7 +448,8 @@ def load_attachment_images(records: list[dict], limit: int = 8) -> list[dict]:
 			if payload:
 				images.append(payload)
 		elif record.get('is_video'):
-			images.extend(_video_frame_images(path, name, min(4, limit - len(images))))
+			remaining = limit - len(images)
+			images.extend(_video_frame_images(path, name, min(MAX_VISUAL_INPUTS, remaining)))
 	return images
 
 
@@ -471,7 +489,7 @@ def format_attachments_for_prompt(records: list[dict]) -> str:
 		if not text and record.get('is_image'):
 			text = '（图片文件；视觉模式下会作为图片内容发送给模型查看）'
 		elif not text and record.get('is_video'):
-			text = '（视频文件；视觉模式下会提取关键帧作为图片发送给模型，音频转录结果见下方）'
+			text = '（视频文件；视觉模式下会按时长提取多张关键帧（最多 20 张）作为图片发送给模型，音频转录结果见下方）'
 		elif not text:
 			detail = record.get('note') or record.get('error') or '没有可读取的文本内容'
 			text = f'（无法提取文本：{detail}）'

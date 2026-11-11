@@ -188,7 +188,7 @@ function attachmentMeta(attachment, visionEnabled = true) {
     return visionEnabled ? `图片 · 视觉模式 · ${formatFileSize(attachment.size)}` : `图片 · 需开启视觉 · ${formatFileSize(attachment.size)}`
   }
   if (isVideoAttachment(attachment)) {
-    return visionEnabled ? `视频 · 关键帧 · ${formatFileSize(attachment.size)}` : `视频 · 需开启视觉 · ${formatFileSize(attachment.size)}`
+    return visionEnabled ? `视频 · 自适应关键帧 · ${formatFileSize(attachment.size)}` : `视频 · 需开启视觉 · ${formatFileSize(attachment.size)}`
   }
   if (attachment.error) return attachment.error
   if (attachment.chars) {
