@@ -8,6 +8,7 @@ import {
   continueHuman,
   deleteChat,
   deleteLocalData,
+  deleteUpload,
   finishLogin,
   getChats,
   getHistory,
@@ -26,6 +27,7 @@ import {
   savePreferences,
   startLogin,
   stopTask,
+  uploadFiles,
 } from './api'
 import { EXAMPLES } from './examples'
 import { Icon } from './icons'
@@ -47,6 +49,7 @@ const DEFAULT_SETTINGS = {
 
 // A single message is capped so one pasted document cannot blow up the prompt.
 const INPUT_MAX_CHARS = 8000
+const MAX_ATTACHMENTS = 5
 // The warning is driven by the model's context window, not by turn count. A
 // few dozen short turns are harmless; a few long code-heavy turns are not.
 const CONTEXT_INFO_RATIO = 0.6
@@ -134,6 +137,31 @@ function formatTokenCount(value) {
 
 function formatTime(value) {
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '0 B'
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${bytes} B`
+}
+
+const IMAGE_ATTACHMENT_KINDS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'heic'])
+
+function isImageAttachment(attachment) {
+  return Boolean(attachment?.is_image) || IMAGE_ATTACHMENT_KINDS.has(String(attachment?.kind || '').toLowerCase())
+}
+
+function attachmentMeta(attachment, visionEnabled = true) {
+  if (isImageAttachment(attachment)) {
+    return visionEnabled ? `图片 · 视觉模式 · ${formatFileSize(attachment.size)}` : `图片 · 需开启视觉 · ${formatFileSize(attachment.size)}`
+  }
+  if (attachment.error) return attachment.error
+  if (attachment.chars) {
+    return `${attachment.chars.toLocaleString()} 字${attachment.truncated ? '（已截断）' : ''}`
+  }
+  if (attachment.note) return attachment.note
+  return formatFileSize(attachment.size)
 }
 
 function formatLoginDate(value) {
@@ -1125,8 +1153,8 @@ function SettingsDrawer({
           </label>
           <label className="toggle-row">
             <span>
-              <strong>使用网页截图</strong>
-              <small>需要模型支持视觉</small>
+              <strong>视觉模式</strong>
+              <small>网页截图 + 上传图片，需要模型支持视觉</small>
             </span>
             <input
               type="checkbox"
@@ -1261,9 +1289,19 @@ function buildContextMessages(messages) {
       const result = message.result || {}
       const links = [...new Set((result.sources || []).map((source) => source.url).filter(Boolean))]
       const files = (result.files || []).map((file) => file.display_name || file.name).filter(Boolean)
+      const attachmentNames = (message.attachments || []).map((item) => item.name).filter(Boolean)
+      const text =
+        message.role === 'user'
+          ? [
+              message.text,
+              attachmentNames.length ? `（附件：${attachmentNames.join('、')}）` : '',
+            ]
+              .filter(Boolean)
+              .join('\n')
+          : result.text || ''
       return {
         role: message.role,
-        text: ((message.role === 'user' ? message.text : result.text) || '').slice(0, 4000),
+        text: text.slice(0, 4000),
         links: links.slice(0, 10),
         files: files.slice(0, 10),
       }
@@ -1315,6 +1353,31 @@ function UserMessage({ message, onCopy }) {
     <div className="chat-message user">
       <div className="user-message-stack">
         <div className="user-bubble">{message.text}</div>
+        {message.attachments?.length > 0 && (
+          <div className="message-attachments">
+            {message.attachments.map((attachment) => (
+              <span
+                key={attachment.id}
+                className={`message-attachment ${attachment.error ? 'failed' : ''}`}
+                title={attachment.note || attachment.error || attachment.name}
+              >
+                {isImageAttachment(attachment) ? (
+                  <img
+                    className="message-attachment-thumb"
+                    src={attachment.url}
+                    alt=""
+                    onError={(event) => {
+                      event.currentTarget.style.display = 'none'
+                    }}
+                  />
+                ) : (
+                  <Icon name="file" size={12} />
+                )}
+                <span>{attachment.name}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <button className="user-copy-button" onClick={() => onCopy(message.text)} title="复制这条输入">
           <Icon name="copy" size={12} />
           复制
@@ -1394,8 +1457,24 @@ function LiveMessage({ steps }) {
   )
 }
 
-function ChatComposer({ value, onChange, onSend, onStop, running, disabled, settings, onSettings, placeholder }) {
-  const canSend = value.trim() && !running && !disabled
+function ChatComposer({
+  value,
+  onChange,
+  onSend,
+  onStop,
+  running,
+  disabled,
+  settings,
+  onSettings,
+  placeholder,
+  attachments = [],
+  uploading = false,
+  attachmentError = '',
+  onFilesSelected,
+  onRemoveAttachment,
+}) {
+  const fileInputRef = useRef(null)
+  const canSend = value.trim() && !running && !disabled && !uploading
 
   function send() {
     if (canSend) onSend(value)
@@ -1403,6 +1482,55 @@ function ChatComposer({ value, onChange, onSend, onStop, running, disabled, sett
 
   return (
     <div className="chat-composer">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="file-input-hidden"
+        onChange={(event) => {
+          onFilesSelected(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      {attachments.length > 0 && (
+        <div className="attachment-row">
+          {attachments.map((attachment) => (
+            <span
+              key={attachment.id}
+              className={`attachment-chip ${attachment.error ? 'failed' : ''}`}
+              title={attachment.note || attachment.error || attachment.name}
+            >
+              {isImageAttachment(attachment) ? (
+                <img
+                  className="attachment-thumb"
+                  src={attachment.url}
+                  alt=""
+                  onError={(event) => {
+                    event.currentTarget.style.display = 'none'
+                  }}
+                />
+              ) : (
+                <Icon name="file" size={13} />
+              )}
+              <span className="attachment-name">{attachment.name}</span>
+              <span className="attachment-meta">{attachmentMeta(attachment, settings.useVision)}</span>
+              <button
+                className="attachment-remove"
+                onClick={() => onRemoveAttachment(attachment.id)}
+                title="移除文件"
+              >
+                <Icon name="x" size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {attachmentError && (
+        <div className="attachment-error">
+          <Icon name="alert" size={13} />
+          <span>{attachmentError}</span>
+        </div>
+      )}
       <textarea
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -1418,6 +1546,15 @@ function ChatComposer({ value, onChange, onSend, onStop, running, disabled, sett
       />
       <div className="chat-composer-footer">
         <div className="composer-options">
+          <button
+            className="soft-chip attach-chip"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
+            title={attachments.length >= MAX_ATTACHMENTS ? `最多 ${MAX_ATTACHMENTS} 个文件` : '添加文件'}
+          >
+            <Icon name="paperclip" size={14} />
+            {uploading ? '上传中…' : '文件'}
+          </button>
           <button className="soft-chip" onClick={onSettings}>
             <Icon name="settings" size={14} />
             {settings.provider}
@@ -1459,7 +1596,23 @@ function ChatComposer({ value, onChange, onSend, onStop, running, disabled, sett
   )
 }
 
-function WelcomeView({ draft, setDraft, onSend, running, disabled, settings, onSettings, error, loginActive, onExample }) {
+function WelcomeView({
+  draft,
+  setDraft,
+  onSend,
+  running,
+  disabled,
+  settings,
+  onSettings,
+  error,
+  loginActive,
+  onExample,
+  attachments,
+  uploading,
+  attachmentError,
+  onFilesSelected,
+  onRemoveAttachment,
+}) {
   return (
     <div className="welcome-view">
       <div className="topbar topbar-home">
@@ -1495,6 +1648,11 @@ function WelcomeView({ draft, setDraft, onSend, running, disabled, settings, onS
           settings={settings}
           onSettings={onSettings}
           placeholder="例如：搜索 browser automation，总结前 3 个结果并附上链接"
+          attachments={attachments}
+          uploading={uploading}
+          attachmentError={attachmentError}
+          onFilesSelected={onFilesSelected}
+          onRemoveAttachment={onRemoveAttachment}
         />
 
         {error && (
@@ -1550,6 +1708,11 @@ function ChatView({
   contextWindow,
   disabled,
   settings,
+  attachments,
+  uploading,
+  attachmentError,
+  onFilesSelected,
+  onRemoveAttachment,
 }) {
   const bottomRef = useRef(null)
   const lastAssistant = [...(thread.messages || [])].reverse().find((message) => message.role === 'assistant')
@@ -1655,6 +1818,11 @@ function ChatView({
           settings={settings}
           onSettings={onSettings}
           placeholder="继续提问，或输入新的任务…"
+          attachments={attachments}
+          uploading={uploading}
+          attachmentError={attachmentError}
+          onFilesSelected={onFilesSelected}
+          onRemoveAttachment={onRemoveAttachment}
         />
       </div>
     </div>
@@ -1668,6 +1836,9 @@ export default function App() {
   const [threads, setThreads] = useState([])
   const [activeThreadId, setActiveThreadId] = useState(null)
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState([])
+  const [uploading, setUploading] = useState(false)
+  const [attachmentError, setAttachmentError] = useState('')
   const [running, setRunning] = useState(false)
   const [liveSteps, setLiveSteps] = useState([])
   const [error, setError] = useState('')
@@ -1687,11 +1858,51 @@ export default function App() {
   const runMetaRef = useRef(null)
   const prefsLoadedRef = useRef(false)
   const toastTimerRef = useRef(null)
+  const uploadEpochRef = useRef(0)
 
   const showToast = useCallback((message) => {
     setToast(message)
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
     toastTimerRef.current = setTimeout(() => setToast(''), 2600)
+  }, [])
+
+  const handleFilesSelected = useCallback(
+    async (fileList) => {
+      const files = Array.from(fileList || [])
+      if (!files.length) return
+      const room = MAX_ATTACHMENTS - attachments.length
+      if (room <= 0) {
+        setAttachmentError(`最多添加 ${MAX_ATTACHMENTS} 个文件`)
+        return
+      }
+      const selected = files.slice(0, room)
+      const epoch = uploadEpochRef.current
+      setAttachmentError(files.length > room ? `最多 ${MAX_ATTACHMENTS} 个文件，已忽略多余文件` : '')
+      setUploading(true)
+      try {
+        const uploaded = await uploadFiles(selected)
+        if (uploadEpochRef.current !== epoch) return
+        setAttachments((prev) => [...prev, ...uploaded])
+        const failed = uploaded.filter((file) => file.error)
+        if (failed.length) {
+          setAttachmentError(failed.map((file) => `${file.name}: ${file.error}`).join('；'))
+        }
+        const images = uploaded.filter((file) => isImageAttachment(file))
+        if (images.length && !settings.useVision) {
+          setAttachmentError('图片需要开启「使用网页截图/视觉模式」才能被模型理解')
+        }
+      } catch (e) {
+        if (uploadEpochRef.current === epoch) setAttachmentError(e.message)
+      } finally {
+        if (uploadEpochRef.current === epoch) setUploading(false)
+      }
+    },
+    [attachments.length, settings.useVision],
+  )
+
+  const handleRemoveAttachment = useCallback((uploadId) => {
+    setAttachments((prev) => prev.filter((item) => item.id !== uploadId))
+    deleteUpload(uploadId).catch(() => {})
   }, [])
 
   const refreshLogins = useCallback(async () => {
@@ -2020,8 +2231,12 @@ export default function App() {
 
   function newChat() {
     if (running) return
+    uploadEpochRef.current += 1
     setActiveThreadId(null)
     setDraft('')
+    setAttachments([])
+    setAttachmentError('')
+    setUploading(false)
     setLiveSteps([])
     liveStepsRef.current = []
     setError('')
@@ -2030,8 +2245,12 @@ export default function App() {
 
   function selectThread(threadId) {
     if (running) return
+    uploadEpochRef.current += 1
     setActiveThreadId(threadId)
     setDraft('')
+    setAttachments([])
+    setAttachmentError('')
+    setUploading(false)
     setLiveSteps([])
     liveStepsRef.current = []
     setError('')
@@ -2052,7 +2271,11 @@ export default function App() {
         setError('')
       }
       const artifactCount = Array.isArray(result?.deleted_artifacts) ? result.deleted_artifacts.length : 0
-      showToast(artifactCount ? `已删除对话，并清理 ${artifactCount} 个附件` : '已删除对话')
+      const uploadCount = Array.isArray(result?.deleted_uploads) ? result.deleted_uploads.length : 0
+      const cleared = []
+      if (artifactCount) cleared.push(`${artifactCount} 个附件`)
+      if (uploadCount) cleared.push(`${uploadCount} 个上传文件`)
+      showToast(cleared.length ? `已删除对话，并清理 ${cleared.join('、')}` : '已删除对话')
     } catch (e) {
       setError(e.message)
     }
@@ -2060,7 +2283,7 @@ export default function App() {
 
   async function sendMessage(text) {
     const clean = (text || '').trim()
-    if (!clean || running) return
+    if (!clean || running || uploading) return
     if (loginActive) {
       setError('请先完成购物网站登录，或取消登录后再发送。')
       return
@@ -2068,9 +2291,15 @@ export default function App() {
 
     const now = Date.now()
     const current = activeThread
+    const outgoingAttachments = attachments
     const contextMessages = buildContextMessages(current?.messages || [])
     const threadId = current?.id || newId()
-    const userMessage = { role: 'user', text: clean, ts: now }
+    const userMessage = {
+      role: 'user',
+      text: clean,
+      ts: now,
+      attachments: outgoingAttachments.length ? outgoingAttachments : undefined,
+    }
     const updatedThread = current
       ? {
           ...current,
@@ -2097,6 +2326,10 @@ export default function App() {
     setDraft('')
     setError('')
     setRunning(true)
+    uploadEpochRef.current += 1
+    setAttachments([])
+    setAttachmentError('')
+    setUploading(false)
     setLiveSteps([])
     liveStepsRef.current = []
     pendingThreadRef.current = threadId
@@ -2115,6 +2348,7 @@ export default function App() {
         search_engine: settings.searchEngine || 'auto',
         thread_id: threadId,
         messages: contextMessages.length ? contextMessages : null,
+        attachments: outgoingAttachments.length ? outgoingAttachments.map((item) => item.id) : null,
       })
       if (apiKey) {
         setProviders((prev) =>
@@ -2273,6 +2507,11 @@ export default function App() {
             contextWindow={contextWindow}
             disabled={loginActive}
             settings={settings}
+            attachments={attachments}
+            uploading={uploading}
+            attachmentError={attachmentError}
+            onFilesSelected={handleFilesSelected}
+            onRemoveAttachment={handleRemoveAttachment}
           />
         ) : (
           <WelcomeView
@@ -2286,6 +2525,11 @@ export default function App() {
             error={error}
             loginActive={loginActive}
             onExample={(task) => setDraft(task)}
+            attachments={attachments}
+            uploading={uploading}
+            attachmentError={attachmentError}
+            onFilesSelected={handleFilesSelected}
+            onRemoveAttachment={handleRemoveAttachment}
           />
         )}
       </main>

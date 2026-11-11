@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .config import APP_SUPPORT_DIR, ARTIFACT_DIR, HISTORY_DIR
+from .uploads import collect_upload_ids, delete_upload_dirs
 
 HISTORY_FILE = HISTORY_DIR / 'history.json'
 CHATS_FILE = APP_SUPPORT_DIR / 'chats.json'
@@ -133,12 +134,12 @@ def _artifact_path(url: str) -> Path | None:
 	return path
 
 
-def delete_chat_and_artifacts(thread_id: str) -> list[str]:
-	"""Delete one chat, its legacy row, and artifacts no other chat references.
+def delete_chat_and_artifacts(thread_id: str) -> dict[str, list[str]]:
+	"""Delete one chat, its legacy row, and files no other chat references.
 
 	Artifacts are copied into a shared folder with deterministic names, so the
-	same file can be referenced by more than one chat. Only remove files that
-	are no longer referenced by any remaining chat or history entry.
+	same file can be referenced by more than one chat. Uploads are also
+	reference-counted through user-message attachment ids.
 	"""
 	with _LOCK:
 		chats = _read_json(CHATS_FILE, [])
@@ -151,10 +152,13 @@ def delete_chat_and_artifacts(thread_id: str) -> list[str]:
 		targets = [item for item in chats if item.get('id') == thread_id]
 		targets += [item for item in history if item.get('id') == thread_id]
 		candidates = _collect_artifact_urls(targets)
+		candidate_uploads = collect_upload_ids(targets)
 
 		chats = [item for item in chats if item.get('id') != thread_id]
 		history = [item for item in history if item.get('id') != thread_id]
-		still_used = _collect_artifact_urls(chats + history)
+		remaining = chats + history
+		still_used = _collect_artifact_urls(remaining)
+		still_used_uploads = collect_upload_ids(remaining)
 		_write_json(CHATS_FILE, chats)
 		_write_json(HISTORY_FILE, history)
 
@@ -168,7 +172,8 @@ def delete_chat_and_artifacts(thread_id: str) -> list[str]:
 				deleted.append(path.name)
 			except OSError:
 				continue
-		return deleted
+		deleted_uploads = delete_upload_dirs(candidate_uploads - still_used_uploads)
+		return {'deleted_artifacts': deleted, 'deleted_uploads': deleted_uploads}
 
 
 def load_preferences() -> dict:

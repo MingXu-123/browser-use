@@ -24,6 +24,7 @@ LOG_DIR = APP_SUPPORT_DIR / 'logs'
 PROFILE_DIR = APP_SUPPORT_DIR / 'browser-use-user-data-dir-browser-profile'
 LEGACY_PROFILE_DIR = APP_SUPPORT_DIR / 'browser-profile'
 ARTIFACT_DIR = APP_SUPPORT_DIR / 'artifacts'
+UPLOADS_DIR = APP_SUPPORT_DIR / 'uploads'
 HISTORY_DIR = APP_SUPPORT_DIR / 'history'
 BROWSER_STATE_FILE = APP_SUPPORT_DIR / 'storage_state.json'
 PLATFORM_LOGINS_FILE = APP_SUPPORT_DIR / 'platform_logins.json'
@@ -171,6 +172,7 @@ def prepare_runtime() -> None:
 	ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 	HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 	DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+	UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 	_migrate_legacy_logs()
 	_cleanup_old_temp_profiles()
 	mark_browser_profile_clean()

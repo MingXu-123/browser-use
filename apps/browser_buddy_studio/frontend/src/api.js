@@ -48,6 +48,21 @@ export function saveHistoryEntry(entry) {
   })
 }
 
+export async function uploadFiles(files) {
+  const form = new FormData()
+  for (const file of files) form.append('files', file)
+  const response = await fetch('/api/uploads', { method: 'POST', body: form })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(data.detail || data.error || `上传失败 (${response.status})`)
+  }
+  return Array.isArray(data) ? data : []
+}
+
+export function deleteUpload(uploadId) {
+  return jsonFetch(`/api/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE' })
+}
+
 export function getPreferences() {
   return jsonFetch('/api/preferences')
 }
